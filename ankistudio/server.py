@@ -308,6 +308,9 @@ def create_app(db_path: str | Path) -> FastAPI:
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC / "index.html")
+        # no-cache: the UI shell must always revalidate so app updates
+        # appear on a normal reload instead of a hard one
+        return FileResponse(STATIC / "index.html",
+                            headers={"Cache-Control": "no-cache"})
 
     return app
