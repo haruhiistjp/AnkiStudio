@@ -1,0 +1,30 @@
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+[00:00.000 --> 00:03.000]  Hej! Jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.000]  Å är och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:03.000]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:03.720]  Å är och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:03.200]  Hej! Jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:03.600]  O, ä och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:03.000]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.320]  Å, är och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:03.000]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.800]  O, är och ö är viktiga bokstäver i svenskan.

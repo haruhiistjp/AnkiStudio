@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+ankistudio/__init__.py
+ankistudio/apkg.py
+ankistudio/cli.py
+ankistudio/importer.py
+ankistudio/server.py
+ankistudio/store.py
+ankistudio.egg-info/PKG-INFO
+ankistudio.egg-info/SOURCES.txt
+ankistudio.egg-info/dependency_links.txt
+ankistudio.egg-info/entry_points.txt
+ankistudio.egg-info/requires.txt
+ankistudio.egg-info/top_level.txt

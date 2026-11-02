@@ -1,0 +1,21 @@
+[project]
+name = "ankistudio"
+version = "0.1.0"
+description = "Local-first workbench for building Anki decks from decks, video+subtitles, and transcripts"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "genanki>=0.13",
+]
+
+[project.optional-dependencies]
+# Japanese tokenization for accurate level classification (optional in v1 —
+# a naive fallback is used when unavailable)
+jp = ["fugashi>=1.3", "unidic-lite>=1.0"]
+
+[project.scripts]
+ankistudio = "ankistudio.cli:main"
+
+[tool.setuptools]
+packages = ["ankistudio"]

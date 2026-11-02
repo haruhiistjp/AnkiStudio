@@ -1,0 +1,2 @@
+[console_scripts]
+ankistudio = ankistudio.cli:main

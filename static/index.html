@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AnkiStudio</title>
+<style>
+:root { --bg:#fafaf8; --side:#f2f1ec; --ink:#213547; --muted:#6b7280;
+  --accent:#b3261e; --line:#e5e7eb; --card:#fff; --ok:#137a3c; --warn:#b26a00;
+  --bad:#c23; }
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
+  color:var(--ink); background:var(--bg); }
+#layout { display:grid; grid-template-columns:230px 1fr; min-height:100vh; }
+#side { background:var(--side); border-right:1px solid var(--line); padding:14px 10px; }
+#side h1 { font-size:16px; margin:2px 8px 14px; }
+#side a { display:block; padding:8px 10px; border-radius:8px; color:var(--ink);
+  text-decoration:none; font-size:14px; }
+#side a.active { background:var(--line); font-weight:600; border-left:3px solid var(--accent); }
+#side .sect { font-size:11px; color:var(--muted); text-transform:uppercase;
+  letter-spacing:.05em; margin:14px 8px 4px; }
+#view { padding:22px 26px; max-width:1060px; }
+h2 { font-size:19px; margin:0 0 14px; }
+.kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:10px; margin-bottom:20px; }
+.kpi { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  padding:12px; text-align:center; }
+.kpi b { font-size:24px; display:block; } .kpi span { color:var(--muted); font-size:12px; }
+table { width:100%; border-collapse:collapse; background:var(--card);
+  border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+th { text-align:left; font-size:11.5px; text-transform:uppercase; color:var(--muted);
+  padding:8px 10px; border-bottom:1px solid var(--line); }
+td { padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+tr:hover td { background:#f7f7f4; }
+.jp { font-size:16px; }
+.dim { color:var(--muted); font-size:12.5px; }
+.bar { background:#e8e8e4; height:12px; border-radius:6px; overflow:hidden; min-width:60px; }
+.bar i { display:block; height:100%; background:var(--accent); }
+.bar.g i { background:var(--ok); }
+button, .btn { border:1px solid var(--line); background:var(--card); color:var(--ink);
+  border-radius:8px; padding:6px 12px; font-size:13px; cursor:pointer; }
+button.primary { background:var(--accent); color:#fff; border:none; }
+button.ok { color:var(--ok); border-color:var(--ok); }
+button.no { color:var(--bad); border-color:var(--bad); }
+input, select { border:1px solid var(--line); border-radius:8px; padding:6px 10px;
+  font-size:13px; background:var(--card); }
+.row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+.badge { display:inline-block; font-size:11px; border-radius:4px; padding:1px 6px;
+  border:1px solid var(--line); color:var(--muted); }
+.badge.appr { color:var(--ok); border-color:var(--ok); }
+.badge.disc { color:var(--bad); border-color:var(--bad); }
+.badge.drop { color:var(--warn); }
+form.box { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  padding:16px; max-width:560px; }
+form.box label { display:block; font-size:12.5px; color:var(--muted); margin:10px 0 3px; }
+form.box input { width:100%; }
+#msg { margin-top:10px; font-size:13px; color:var(--muted); min-height:18px; }
+.pager { display:flex; gap:8px; align-items:center; margin-top:12px; }
+.hint { color:var(--muted); font-size:12.5px; }
+.check { width:16px; height:16px; }
+</style>
+</head>
+<body>
+<div id="layout">
+  <aside id="side">
+    <h1>AnkiStudio</h1>
+    <div class="sect">Workbench</div>
+    <a data-view="stats" class="active">Statistics</a>
+    <a data-view="browse">Card browser</a>
+    <div class="sect">Inputs</div>
+    <a data-view="sources">Sources</a>
+    <a data-view="lexicons">Lexicons</a>
+    <div class="sect">Later phases</div>
+    <a class="dim">Video + subs</a>
+    <a class="dim">Vocabulary flow</a>
+    <a class="dim">Grammar flow</a>
+    <a class="dim">AI settings</a>
+  </aside>
+  <main id="view"></main>
+</div>
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const es = (s) => document.createElement(s);
+let VIEW = 'stats';
+let BROWSE = { page: 1, q: '', source: 0, level: '', status: '', sort: 'len' };
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+  return r.json();
+}
+const esc = (s) => (s || '').replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- stats ---------- */
+async function showStats() {
+  const d = await api('/api/stats');
+  const s = d.stats;
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Statistics</h2>'; $('#view').append(h);
+  const k = es('div'); k.className = 'kpis';
+  k.innerHTML =
+    `<div class="kpi"><b>${s.total.toLocaleString()}</b><span>sentences indexed</span></div>` +
+    `<div class="kpi"><b>${s.kept.toLocaleString()}</b><span>kept after quality rules</span></div>` +
+    `<div class="kpi"><b>${s.approved.toLocaleString()}</b><span>approved</span></div>` +
+    `<div class="kpi"><b>${s.discarded.toLocaleString()}</b><span>discarded</span></div>` +
+    `<div class="kpi"><b>${s.sources}</b><span>sources</span></div>`;
+  $('#view').append(k);
+  if (s.per_source.length) {
+    const t = es('table');
+    t.innerHTML = '<tr><th>source</th><th>kind</th><th>sentences</th><th>kept</th>' +
+      '<th style="width:140px">kept %</th><th>approved</th></tr>' +
+      s.per_source.map(r => {
+        const pct = r.sentences ? Math.round(100 * (r.kept || 0) / r.sentences) : 0;
+        return `<tr><td>${esc(r.name)}</td><td class="dim">${esc(r.kind)}</td>` +
+          `<td>${(r.sentences || 0).toLocaleString()}</td>` +
+          `<td>${(r.kept || 0).toLocaleString()}</td>` +
+          `<td><div class="bar ${pct > 80 ? 'g' : ''}"><i style="width:${pct}%"></i></div></td>` +
+          `<td>${r.approved || 0}</td></tr>`;
+      }).join('');
+    $('#view').append(t);
+  }
+  if (s.length_hist.length) {
+    const max = Math.max(...s.length_hist.map(b => b.c));
+    const t = es('table'); t.style.marginTop = '18px';
+    t.innerHTML = '<tr><th>length (chars)</th><th>count</th></tr>' +
+      s.length_hist.map(b =>
+        `<tr><td>${b.bucket}–${b.bucket + 9}</td>` +
+        `<td style="width:60%"><div class="bar"><i style="width:${100 * b.c / max}%"></i></div></td>` +
+        `<td class="dim">${b.c.toLocaleString()}</td></tr>`).join('');
+    $('#view').append(t);
+  }
+}
+
+/* ---------- browse ---------- */
+async function showBrowse() {
+  const d0 = await api('/api/stats');
+  $('#view').innerHTML = '';
+  const h = es('div');
+  h.innerHTML = '<h2>Card browser</h2>';
+  $('#view').append(h);
+  const bar = es('div'); bar.className = 'row';
+  const srcOpts = '<option value="0">all sources</option>' +
+    d0.sources.map(s => `<option value="${s.id}"${s.id == BROWSE.source ? ' selected' : ''}>${esc(s.name)}</option>`).join('');
+  const levOpts = '<option value="">any level</option>' +
+    (d0.lexicons[0] ? JSON.parse(d0.lexicons[0].level_order || '[]')
+      .map(l => `<option${l === BROWSE.level ? ' selected' : ''}>${esc(l)}</option>`).join('') : '');
+  bar.innerHTML =
+    `<input id="bq" placeholder="text search…" value="${esc(BROWSE.q)}" style="min-width:180px">` +
+    `<select id="bsrc">${srcOpts}</select>` +
+    `<select id="blev">${levOpts}</select>` +
+    `<select id="bstat">
+      <option value="">any status</option>
+      <option value="pending"${BROWSE.status === 'pending' ? ' selected' : ''}>pending</option>
+      <option value="approved"${BROWSE.status === 'approved' ? ' selected' : ''}>approved</option>
+      <option value="discarded"${BROWSE.status === 'discarded' ? ' selected' : ''}>discarded</option>
+    </select>` +
+    `<select id="bsort">
+      <option value="len"${BROWSE.sort === 'len' ? ' selected' : ''}>shortest first</option>
+      <option value="len_desc"${BROWSE.sort === 'len_desc' ? ' selected' : ''}>longest first</option>
+      <option value="source"${BROWSE.sort === 'source' ? ' selected' : ''}>by source</option>
+      <option value="recent"${BROWSE.sort === 'recent' ? ' selected' : ''}>newest</option>
+    </select>` +
+    `<button class="primary" id="bgo">Filter</button>` +
+    `<button class="ok" id="bappr">✓ Approve selected</button>` +
+    `<button class="no" id="bdisc">✕ Discard selected</button>`;
+  $('#view').append(bar);
+  const t = es('table'); t.id = 'btable';
+  $('#view').append(t);
+  const pager = es('div'); pager.className = 'pager'; pager.id = 'bpager';
+  $('#view').append(pager);
+  const run = async () => {
+    BROWSE.q = $('#bq').value; BROWSE.source = +$('#bsrc').value;
+    BROWSE.level = $('#blev').value; BROWSE.status = $('#bstat').value;
+    BROWSE.sort = $('#bsort').value;
+    await loadPage(1);
+  };
+  $('#bgo').onclick = run;
+  $('#bq').onkeydown = e => { if (e.key === 'Enter') run(); };
+  $('#bappr').onclick = () => bulk('approved');
+  $('#bdisc').onclick = () => bulk('discarded');
+  await loadPage(BROWSE.page);
+}
+
+async function loadPage(p) {
+  BROWSE.page = p;
+  const p2 = new URLSearchParams({ q: BROWSE.q, source: BROWSE.source,
+    level: BROWSE.level, status: BROWSE.status, sort: BROWSE.sort,
+    page: p, per: 50 });
+  const d = await api('/api/sentences?' + p2);
+  const t = $('#btable');
+  t.innerHTML = '<tr><th></th><th>sentence</th><th>source</th><th>len</th>' +
+    '<th>status</th><th>actions</th></tr>' +
+    (d.rows.length ? d.rows.map(r => browseRow(r)).join('')
+      : `<tr><td colspan="6" class="dim" style="text-align:center;padding:20px">
+         no sentences — import a deck in Sources</td></tr>`);
+  for (const b of t.querySelectorAll('button[data-dec]')) {
+    b.onclick = async () => {
+      await api('/api/decide', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ids: [+b.dataset.id], decision: b.dataset.dec }) });
+      loadPage(BROWSE.page);
+    };
+  }
+  const pages = Math.max(1, Math.ceil(d.total / d.per));
+  $('#bpager').innerHTML =
+    `<span class="dim">${d.total.toLocaleString()} sentences · page ${p}/${pages}</span>` +
+    (p > 1 ? `<button id="pprev">← prev</button>` : '') +
+    (p < pages ? `<button id="pnext">next →</button>` : '');
+  if ($('#pprev')) $('#pprev').onclick = () => loadPage(p - 1);
+  if ($('#pnext')) $('#pnext').onclick = () => loadPage(p + 1);
+}
+
+function browseRow(r) {
+  const badge = r.decision === 'approved' ? '<span class="badge appr">approved</span>'
+    : r.decision === 'discarded' ? '<span class="badge disc">discarded</span>'
+    : r.keep ? '' : `<span class="badge drop">dropped ${r.drop_code || ''}</span>`;
+  return `<tr>
+    <td><input type="checkbox" class="check" data-id="${r.id}"></td>
+    <td><div class="jp">${esc(r.text)}</div>
+        ${r.translation ? `<div class="dim">${esc(r.translation.slice(0, 80))}</div>` : ''}</td>
+    <td class="dim">${esc(r.source_name)}</td>
+    <td class="dim">${r.char_len}</td>
+    <td>${badge}</td>
+    <td>${r.keep ? `<button class="ok" data-dec="approved" data-id="${r.id}">✓</button>
+        <button class="no" data-dec="discarded" data-id="${r.id}">✕</button>` : ''}</td>
+  </tr>`;
+}
+
+async function bulk(decision) {
+  const ids = [...document.querySelectorAll('.check:checked')].map(c => +c.dataset.id);
+  if (!ids.length) return;
+  await api('/api/decide', { method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ids, decision }) });
+  loadPage(BROWSE.page);
+}
+
+/* ---------- sources / lexicons ---------- */
+async function showSources() {
+  const d = await api('/api/stats');
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Sources</h2>'; $('#view').append(h);
+  const f = es('div'); f.className = 'box';
+  f.innerHTML =
+    '<h2 style="font-size:15px">Import Anki deck (.apkg)</h2>' +
+    '<label>path to .apkg (absolute or ~)</label><input id="ipath" placeholder="/path/to/deck.apkg">' +
+    '<label>max characters per sentence</label><input id="imax" type="number" value="60">' +
+    '<button class="primary" id="igo" style="margin-top:12px">Import</button>' +
+    '<div id="msg"></div>';
+  $('#view').append(f);
+  $('#igo').onclick = async () => {
+    $('#msg').textContent = 'importing…';
+    try {
+      const r = await api('/api/import/apkg', { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ path: $('#ipath').value, max_chars: +$('#imax').value }) });
+      $('#msg').textContent = `imported: ${r.notes} notes, ${r.kept} kept, drops ${JSON.stringify(r.drops)}`;
+      setTimeout(showSources, 1200);
+    } catch (e) { $('#msg').textContent = 'error: ' + e.message; }
+  };
+  if (d.sources.length) {
+    const t = es('table'); t.style.marginTop = '18px';
+    t.innerHTML = '<tr><th>source</th><th>kind</th><th>path</th><th>sentences</th><th>kept</th></tr>' +
+      d.sources.map(s => `<tr><td>${esc(s.name)}</td><td class="dim">${s.kind}</td>` +
+        `<td class="dim">${esc(s.path || '')}</td><td>${s.sentences}</td><td>${s.kept}</td></tr>`).join('');
+    $('#view').append(t);
+  }
+}
+
+async function showLexicons() {
+  const d = await api('/api/stats');
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Lexicons (frequency lists)</h2>'; $('#view').append(h);
+  const f = es('div'); f.className = 'box';
+  f.innerHTML =
+    '<h2 style="font-size:15px">Import frequency list</h2>' +
+    '<label>path — .tsv/.csv (word, level, rank) or an .apkg deck like Kaishi</label>' +
+    '<input id="lpath" placeholder="/path/to/list.tsv or kaishi.apkg">' +
+    '<button class="primary" id="lgo" style="margin-top:12px">Import</button>' +
+    '<div id="msg"></div>' +
+    '<p class="hint">Levels power the level filter in the card browser ' +
+    '(a sentence shows at the easiest level whose words it contains).</p>';
+  $('#view').append(f);
+  $('#lgo').onclick = async () => {
+    const p = $('#lpath').value;
+    const url = p.endsWith('.apkg') ? '/api/import/freq-apkg' : '/api/import/freq-tsv';
+    $('#msg').textContent = 'importing…';
+    try {
+      await api(url, { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ path: p }) });
+      $('#msg').textContent = 'imported ✓';
+      setTimeout(showLexicons, 800);
+    } catch (e) { $('#msg').textContent = 'error: ' + e.message; }
+  };
+  if (d.lexicons.length) {
+    const t = es('table'); t.style.marginTop = '18px';
+    t.innerHTML = '<tr><th>lexicon</th><th>words</th><th>levels</th></tr>' +
+      d.lexicons.map(l => `<tr><td>${esc(l.name)}</td><td>${l.words}</td>` +
+        `<td class="dim">${esc((JSON.parse(l.level_order || '[]')).join(' · '))}</td></tr>`).join('');
+    $('#view').append(t);
+  }
+}
+
+/* ---------- router ---------- */
+const VIEWS = { stats: showStats, browse: showBrowse,
+                sources: showSources, lexicons: showLexicons };
+for (const a of document.querySelectorAll('#side a[data-view]')) {
+  a.onclick = () => {
+    VIEW = a.dataset.view;
+    for (const b of document.querySelectorAll('#side a'))
+      b.classList.toggle('active', b === a);
+    VIEWS[VIEW]();
+  };
+}
+VIEWS.stats();
+</script>
+</body>
+</html>

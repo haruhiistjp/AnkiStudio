@@ -1,0 +1,66 @@
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/whisper/transcribe.py:132: UserWarning: FP16 is not supported on CPU; using FP32 instead
+  warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+[00:00.000 --> 00:03.400]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.000]  Å och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:03.200]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.160]  Å och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:02.320]  Kan du hjälpa mig att hitta tågstationen?
+[00:00.000 --> 00:03.000]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.000]  Å är och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:02.560]  Kan du hjälpa mig att hitta tågstationen?
+[00:00.000 --> 00:03.000]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.400]  O, E och Ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:02.800]  Kan du hjälpa mig att hitta tågstationen?
+[00:00.000 --> 00:03.000]  Hej! Jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.160]  Å är och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:02.800]  Kan du hjälpa mig att hitta tågstationen?
+[00:00.000 --> 00:03.000]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:03.720]  Å är och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:02.560]  Kan du hjälpa mig att hitta tågstationen?
+[00:00.000 --> 00:03.000]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.000]  Å och ö är viktiga bokstäver i svenskan.
+[00:00.000 --> 00:03.000]  Kan du hjälpa mig att hitta tågstationen?
+[00:00.000 --> 00:03.320]  Hej, jag heter Anna och bor i Göteborg.
+[00:00.000 --> 00:04.880]  Å, är och ö är viktiga bokstäver i svenskan.

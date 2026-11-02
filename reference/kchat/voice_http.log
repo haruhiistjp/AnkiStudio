@@ -1,0 +1,26 @@
+::1 - - [30/Oct/2026 15:33:28] "GET /index.html HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /index.html HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Autonoe_diacritics.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Aoede_diacritics.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Aoede_common.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Autonoe_common.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Autonoe_question.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Charon_common.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Charon_diacritics.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Charon_question.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Fenrir_common.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Fenrir_diacritics.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Kore_common.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Fenrir_question.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Kore_question.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Kore_diacritics.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Puck_common.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Puck_question.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Puck_diacritics.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Vindemiatrix_diacritics.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Vindemiatrix_common.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Vindemiatrix_question.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Zephyr_common.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /Zephyr_diacritics.wav HTTP/1.1" 200 -
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] code 404, message File not found
+::ffff:127.0.0.1 - - [30/Oct/2026 15:34:13] "GET /favicon.ico HTTP/1.1" 404 -
