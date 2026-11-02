@@ -30,6 +30,18 @@ class DecideReq(BaseModel):
     ids: list[int]
     decision: str          # approved | discarded | ''
 
+
+class ClassifyReq(BaseModel):
+    lexicon_id: int
+
+
+class ExportReq(BaseModel):
+    name: str = "AnkiStudio export"
+    preset: str = "immersion"      # immersion | reading
+    status: str = "approved"       # approved | pending | all
+    source: int = 0
+    level: str = ""
+
 from .importer import import_apkg, import_freq_apkg, import_freq_tsv
 from .store import Store
 
@@ -104,17 +116,8 @@ def create_app(db_path: str | Path) -> FastAPI:
             f" join sources s on s.id=n.source_id where {' and '.join(where)}",
             args)]
         if level:
-            lex = store.lexicons()
-            if lex:
-                wmap = store.lexicon_word_map(lex[0]["id"])
-                order = _json.loads(lex[0]["level_order"] or "[]")
-                pos = {l: i for i, l in enumerate(order)}
-                wanted = pos.get(level, 0)
-                hard = [w for w, l in wmap.items()
-                        if pos.get(l, 99) > wanted and len(w) >= 2]
-                def ok(r):
-                    return not any(w in r["text"] for w in hard)
-                rows = [r for r in rows if ok(r)]
+            # exact: level is precomputed by POST /api/classify
+            rows = [r for r in rows if r["level"] == level]
         keyfns = {
             "len": lambda r: (r["char_len"] or 0, r["id"]),
             "len_desc": lambda r: (-(r["char_len"] or 0), r["id"]),
@@ -162,6 +165,35 @@ def create_app(db_path: str | Path) -> FastAPI:
             raise HTTPException(404, "media missing in package")
         return Response(content=data, media_type=ctype,
                         headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.post("/api/classify")
+    def classify(req: ClassifyReq):
+        from .classify import classify_store
+        try:
+            return classify_store(store, req.lexicon_id)
+        except KeyError as e:
+            raise HTTPException(404, str(e))
+
+    @app.post("/api/export")
+    def export(req: ExportReq):
+        from .exporter import build_deck
+        if req.preset not in ("immersion", "reading"):
+            raise HTTPException(400, "preset must be immersion|reading")
+        res = build_deck(store, req.name, req.preset, req.status,
+                         req.source, req.level)
+        if "error" in res:
+            raise HTTPException(400, res["error"])
+        return res
+
+    @app.get("/api/export/file")
+    def export_file(name: str):
+        from fastapi.responses import FileResponse
+        p = Path(name)
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        if not p.exists() or p.parent.name not in ("result",):
+            raise HTTPException(404, "no such export")
+        return FileResponse(p, filename=p.name)
 
     # ---------- static ui ----------
 

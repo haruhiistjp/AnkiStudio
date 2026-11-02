@@ -99,6 +99,7 @@ form.box input { width:100%; }
     <div class="sect">Inputs</div>
     <a data-view="sources">Sources</a>
     <a data-view="lexicons">Lexicons</a>
+    <a data-view="export">Export deck</a>
     <div class="sect">Later phases</div>
     <a class="dim">Video + subs</a>
     <a class="dim">Vocabulary flow</a>
@@ -352,9 +353,21 @@ async function showLexicons() {
   };
   if (d.lexicons.length) {
     const t = es('table'); t.style.marginTop = '18px';
-    t.innerHTML = '<tr><th>lexicon</th><th>words</th><th>levels</th></tr>' +
+    t.innerHTML = '<tr><th>lexicon</th><th>words</th><th>levels</th><th></th></tr>' +
       d.lexicons.map(l => `<tr><td>${esc(l.name)}</td><td>${l.words}</td>` +
-        `<td class="dim">${esc((JSON.parse(l.level_order || '[]')).join(' · '))}</td></tr>`).join('');
+        `<td class="dim">${esc((JSON.parse(l.level_order || '[]')).join(' · '))}</td>` +
+        `<td><button data-clsfy="${l.id}">Classify levels</button></td></tr>`).join('');
+  for (const b of t.querySelectorAll('button[data-clsfy]')) {
+    b.onclick = async () => {
+      b.textContent = 'classifying…';
+      try {
+        const r = await api('/api/classify', { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ lexicon_id: +b.dataset.clsfy }) });
+        b.textContent = `✓ ${r.mode.split(' ')[0]} · ${Object.entries(r.by_level).map(([k,v])=>k+':'+v).join(' ')}`;
+      } catch (e) { b.textContent = 'error: ' + e.message; }
+    };
+  }
     $('#view').append(t);
   }
 }
@@ -426,9 +439,48 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closePreview();
 });
 
+/* ---------- export ---------- */
+async function showExport() {
+  const d = await api('/api/stats');
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Export deck (.apkg)</h2>'; $('#view').append(h);
+  const f = es('div'); f.className = 'box';
+  const srcOpts = '<option value="0">all sources</option>' +
+    d.sources.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  const levOpts = '<option value="">any level</option>' +
+    (d.lexicons[0] ? JSON.parse(d.lexicons[0].level_order || '[]')
+      .map(l => `<option>${esc(l)}</option>`).join('') : '');
+  f.innerHTML =
+    '<label>deck name</label><input id="xname" value="AnkiStudio export">' +
+    '<label>preset (what goes on the card)</label>' +
+    '<select id="xpreset"><option value="immersion">immersion — front: image + audio; back: sentence, reading, translation</option>' +
+    '<option value="reading">reading — front: sentence; back: reading, translation, audio</option></select>' +
+    '<label>which sentences</label>' +
+    '<select id="xstatus"><option value="approved">approved only</option>' +
+    '<option value="pending">pending (not yet reviewed)</option>' +
+    '<option value="all">all kept</option></select>' +
+    '<select id="xsrc">' + srcOpts + '</select>' +
+    '<select id="xlev">' + levOpts + '</select>' +
+    '<button class="primary" id="xgo" style="margin-top:14px">Build .apkg</button>' +
+    '<div id="xres" class="dim" style="margin-top:10px"></div>';
+  $('#view').append(f);
+  $('#xgo').onclick = async () => {
+    $('#xres').textContent = 'building…';
+    try {
+      const r = await api('/api/export', { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: $('#xname').value,
+          preset: $('#xpreset').value, status: $('#xstatus').value,
+          source: +$('#xsrc').value, level: $('#xlev').value }) });
+      $('#xres').innerHTML = `✓ ${r.notes} notes, ${r.media_files} media → ` +
+        `<a href="/api/export/file?name=${encodeURIComponent(r.path)}">${esc(r.path.split('/').pop())}</a>`;
+    } catch (e) { $('#xres').textContent = 'error: ' + e.message; }
+  };
+}
+
 /* ---------- router ---------- */
 const VIEWS = { stats: showStats, browse: showBrowse,
-                sources: showSources, lexicons: showLexicons };
+                sources: showSources, lexicons: showLexicons, export: showExport };
 for (const a of document.querySelectorAll('#side a[data-view]')) {
   a.onclick = () => {
     VIEW = a.dataset.view;
