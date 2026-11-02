@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: ankistudio
+Version: 0.1.0
+Summary: Local-first workbench for building Anki decks from decks, video+subtitles, and transcripts
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn>=0.29
+Requires-Dist: genanki>=0.13
+Provides-Extra: jp
+Requires-Dist: fugashi>=1.3; extra == "jp"
+Requires-Dist: unidic-lite>=1.0; extra == "jp"
