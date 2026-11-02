@@ -40,12 +40,14 @@ class VideoReq(BaseModel):
     video: str
     subs: str
     offset: float = 0.0
+    pad: float = 0.35
     name: str | None = None
 
 
 class ShiftReq(BaseModel):
     offset: float = 0.0
     segments: list[dict] = []      # [{at: seconds, shift: seconds}] absolute
+    pad: float | None = None       # audio padding seconds for this source
 
 
 class ExportReq(BaseModel):
@@ -55,7 +57,7 @@ class ExportReq(BaseModel):
     source: int = 0
     level: str = ""
     out_dir: str = "result"
-    pad: float = 0.35              # audio padding seconds for video cuts
+    pad: float | None = None        # audio padding; None = source default
 
 from .importer import import_apkg, import_freq_apkg, import_freq_tsv
 from .store import Store
@@ -155,7 +157,7 @@ def create_app(db_path: str | Path) -> FastAPI:
         if not b.exists():
             raise HTTPException(404, f"no subtitles: {b}")
         try:
-            return _iv(store, v, b, offset=req.offset, name=req.name)
+            return _iv(store, v, b, offset=req.offset, pad=req.pad, name=req.name)
         except ValueError as e:
             raise HTTPException(400, str(e))
 
@@ -176,6 +178,8 @@ def create_app(db_path: str | Path) -> FastAPI:
         meta = _j.loads(r["meta"] or "{}")
         meta["offset"] = req.offset
         meta["segments"] = sorted(req.segments, key=lambda g: g.get("at", 0))
+        if req.pad is not None:
+            meta["pad"] = max(0.0, min(5.0, req.pad))
         store.db.execute("update sources set meta=? where id=?",
                          (_j.dumps(meta), sid))
         store.db.commit()
@@ -210,7 +214,8 @@ def create_app(db_path: str | Path) -> FastAPI:
             try:
                 if kind == "audio":
                     ext = fmt if fmt in ("mp3", "m4a", "wav", "ogg") else "mp3"
-                    p = _ff.cut_audio(video, start, end, ext, meta=meta)
+                    p = _ff.cut_audio(video, start, end, ext, meta=meta,
+                                      pad=meta.get("pad"))
                     return FileResponse(p, filename=f"as-{sid}.{ext}",
                                         headers={"Cache-Control": "private, max-age=3600"})
                 p = _ff.grab_frame(video, start + (end - start) * 0.4, meta=meta)
@@ -268,14 +273,16 @@ def create_app(db_path: str | Path) -> FastAPI:
             raise HTTPException(400, "preset must be immersion|reading")
         res = build_deck(store, req.name, req.preset, req.status,
                          req.source, req.level, out_dir=req.out_dir,
-                         pad=max(0.0, min(5.0, req.pad)))
+                         pad=(max(0.0, min(5.0, req.pad))
+                              if req.pad is not None else None))
         if "error" in res:
             raise HTTPException(400, res["error"])
         return res
 
     @app.get("/api/browse")
-    def browse(path: str = "~"):
-        """List directories (for the export destination picker)."""
+    def browse(path: str = "~", exts: str = ""):
+        """List directories; with ?exts=mp4,mkv also matching files
+        (for path pickers that choose a file, not a folder)."""
         p = Path(path).expanduser()
         try:
             if p.is_dir():
@@ -284,15 +291,20 @@ def create_app(db_path: str | Path) -> FastAPI:
             pass
         if not p.is_dir():
             p = Path.home()
-        dirs = []
+        ext_list = {("." + e.lower().lstrip(".")) for e in exts.split(",") if e.strip()}
+        dirs, files = [], []
         try:
             for e in sorted(p.iterdir(), key=lambda x: x.name.lower()):
-                if e.is_dir() and not e.name.startswith("."):
+                if e.name.startswith("."):
+                    continue
+                if e.is_dir():
                     dirs.append(e.name)
+                elif ext_list and e.suffix.lower() in ext_list:
+                    files.append(e.name)
         except PermissionError:
             pass
         return {"path": str(p), "parent": str(p.parent) if p.parent != p else "",
-                "dirs": dirs}
+                "dirs": dirs, "files": files}
 
     @app.get("/api/export/file")
     def export_file(name: str):
