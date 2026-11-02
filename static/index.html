@@ -7,12 +7,12 @@
 <style>
 :root { --bg:#fafaf8; --side:#f2f1ec; --ink:#213547; --muted:#6b7280;
   --accent:#b3261e; --line:#e5e7eb; --card:#fff; --ok:#137a3c; --warn:#b26a00;
-  --bad:#c23; }
-html.dark { --bg:#161619; --side:#1c1c20; --ink:#e5e7eb; --muted:#9ca3af;
+  --bad:#c23; --hov:#f7f7f4; }
+html.dark { --hov:#26262b; --bg:#161619; --side:#1c1c20; --ink:#e5e7eb; --muted:#9ca3af;
   --accent:#e57373; --line:#2d2d33; --card:#202024; }
-html.nord { --bg:#2e3440; --side:#292e39; --ink:#eceff4; --muted:#9aa5b8;
+html.nord { --hov:#3b4252; --bg:#2e3440; --side:#292e39; --ink:#eceff4; --muted:#9aa5b8;
   --accent:#88c0d0; --line:#3b4252; --card:#353c4a; }
-html.solar { --bg:#fdf6e3; --side:#f3ecd8; --ink:#586e75; --muted:#93a1a1;
+html.solar { --hov:#eee6d0; --bg:#fdf6e3; --side:#f3ecd8; --ink:#586e75; --muted:#93a1a1;
   --accent:#cb4b16; --line:#eee8d5; --card:#faf3e2; }
 * { box-sizing: border-box; }
 body { margin:0; font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
@@ -37,7 +37,8 @@ table { width:100%; border-collapse:collapse; background:var(--card);
 th { text-align:left; font-size:11.5px; text-transform:uppercase; color:var(--muted);
   padding:8px 10px; border-bottom:1px solid var(--line); }
 td { padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-tr:hover td { background:#f7f7f4; }
+tr:hover td { background:var(--hov); }
+tr[data-pv] { cursor:pointer; }
 .jp { font-size:16px; }
 .dim { color:var(--muted); font-size:12.5px; }
 .bar { background:#e8e8e4; height:12px; border-radius:6px; overflow:hidden; min-width:60px; }
@@ -49,7 +50,9 @@ button.primary { background:var(--accent); color:#fff; border:none; }
 button.ok { color:var(--ok); border-color:var(--ok); }
 button.no { color:var(--bad); border-color:var(--bad); }
 input, select { border:1px solid var(--line); border-radius:8px; padding:6px 10px;
-  font-size:13px; background:var(--card); }
+  font-size:13px; background:var(--card); color:var(--ink); }
+input::placeholder { color:var(--muted); }
+select, option { background:var(--card); color:var(--ink); }
 .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
 .badge { display:inline-block; font-size:11px; border-radius:4px; padding:1px 6px;
   border:1px solid var(--line); color:var(--muted); }
@@ -240,8 +243,11 @@ async function loadPage(p) {
       : `<tr><td colspan="6" class="dim" style="text-align:center;padding:20px">
          no sentences — import a deck in Sources</td></tr>`);
   const byId = Object.fromEntries(d.rows.map(r => [r.id, r]));
-  for (const el of t.querySelectorAll('[data-pv]')) {
-    el.onclick = () => openPreview(byId[+el.dataset.pv]);
+  for (const tr of t.querySelectorAll('tr[data-pv]')) {
+    tr.onclick = (ev) => {
+      if (ev.target.closest('button, input, label, a')) return;
+      openPreview(byId[+tr.dataset.pv]);
+    };
   }
   for (const b of t.querySelectorAll('button[data-dec]')) {
     b.onclick = async () => {
@@ -263,7 +269,7 @@ function browseRow(r) {
   const badge = r.decision === 'approved' ? '<span class="badge appr">approved</span>'
     : r.decision === 'discarded' ? '<span class="badge disc">discarded</span>'
     : r.keep ? '' : `<span class="badge drop">dropped ${r.drop_code || ''}</span>`;
-  return `<tr>
+  return `<tr data-pv="${r.id}" title="click to preview as an Anki card">
     <td><input type="checkbox" class="check" data-id="${r.id}"></td>
     <td><div class="jp">${esc(r.text)}</div>
         ${r.translation ? `<div class="dim">${esc(r.translation.slice(0, 80))}</div>` : ''}</td>
