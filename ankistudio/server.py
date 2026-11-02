@@ -127,6 +127,42 @@ def create_app(db_path: str | Path) -> FastAPI:
         return {"total": total, "page": page, "per": per,
                 "rows": rows[start:start + per]}
 
+
+    @app.get("/api/media/{sid}/{kind}")
+    def media(sid: int, kind: str):
+        """Serve a sentence's audio/image straight out of its source .apkg."""
+        import zipfile as _zip
+        from fastapi.responses import Response
+        from .apkg import read_media_file
+        if kind not in ("audio", "image"):
+            raise HTTPException(400, "kind must be audio|image")
+        r = store.db.execute(
+            "select n.media_audio, n.media_image, s.path from sentences n"
+            " join sources s on s.id=n.source_id where n.id=?", (sid,)).fetchone()
+        if not r or not r["path"]:
+            raise HTTPException(404, "no source file")
+        fname = r["media_audio"] if kind == "audio" else r["media_image"]
+        if not fname:
+            raise HTTPException(404, f"no {kind} on this sentence")
+        try:
+            if kind == "image":
+                from .media import image_bytes
+                data, ctype = image_bytes(r["path"], fname)
+            else:
+                data, _ = read_media_file(r["path"], fname)
+                ext = (fname.rsplit(".", 1)[-1] or "").lower()
+                ctype = {"mp3": "audio/mpeg", "m4a": "audio/mp4",
+                         "aac": "audio/aac", "ogg": "audio/ogg",
+                         "wav": "audio/wav", "webm": "audio/webm"}.get(ext, "application/octet-stream")
+        except KeyError:
+            raise HTTPException(404, "media missing in package")
+        except (OSError, _zip.BadZipFile):
+            raise HTTPException(410, "source file moved or unreadable")
+        if not data:
+            raise HTTPException(404, "media missing in package")
+        return Response(content=data, media_type=ctype,
+                        headers={"Cache-Control": "private, max-age=3600"})
+
     # ---------- static ui ----------
 
     @app.get("/")
