@@ -237,10 +237,10 @@ async function loadPage(p) {
     page: p, per: 50 });
   const d = await api('/api/sentences?' + p2);
   const t = $('#btable');
-  t.innerHTML = '<tr><th></th><th>sentence</th><th>source</th><th>len</th>' +
+  t.innerHTML = '<tr><th></th><th>sentence</th><th>source</th><th>info</th><th>len</th>' +
     '<th>status</th><th>actions</th></tr>' +
     (d.rows.length ? d.rows.map(r => browseRow(r)).join('')
-      : `<tr><td colspan="6" class="dim" style="text-align:center;padding:20px">
+      : `<tr><td colspan="7" class="dim" style="text-align:center;padding:20px">
          no sentences — import a deck in Sources</td></tr>`);
   const byId = Object.fromEntries(d.rows.map(r => [r.id, r]));
   for (const tr of t.querySelectorAll('tr[data-pv]')) {
@@ -269,11 +269,15 @@ function browseRow(r) {
   const badge = r.decision === 'approved' ? '<span class="badge appr">approved</span>'
     : r.decision === 'discarded' ? '<span class="badge disc">discarded</span>'
     : r.keep ? '' : `<span class="badge drop">dropped ${r.drop_code || ''}</span>`;
+  const flags = (r.flags || '').split(',').filter(Boolean);
+  const info = (r.media_image ? '🖼' : '') + (r.media_audio ? '♪' : '') +
+    (flags.length ? ` <span class="badge">${esc(flags.join(' '))}</span>` : '');
   return `<tr data-pv="${r.id}" title="click to preview as an Anki card">
     <td><input type="checkbox" class="check" data-id="${r.id}"></td>
     <td><div class="jp">${esc(r.text)}</div>
         ${r.translation ? `<div class="dim">${esc(r.translation.slice(0, 80))}</div>` : ''}</td>
     <td class="dim">${esc(r.source_name)}</td>
+    <td class="dim">${info}</td>
     <td class="dim">${r.char_len}</td>
     <td>${badge}</td>
     <td>${r.keep ? `<button class="ok" data-dec="approved" data-id="${r.id}">✓</button>
@@ -406,10 +410,16 @@ function renderPreview() {
 }
 $('#pv-close').onclick = closePreview;
 $('#pv-flip').onclick = () => { PV.back = !PV.back; renderPreview(); };
-$('#pv-card').onclick = () => { PV.back = !PV.back; renderPreview(); };
+$('#pv-card').onclick = () => {
+  // a click that made (or kept) a text selection means the user is
+  // selecting to copy — never flip the card then
+  if (window.getSelection && String(window.getSelection())) return;
+  PV.back = !PV.back; renderPreview();
+};
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && $('#preview').classList.contains('open')
-      && document.activeElement.tagName !== 'INPUT') {
+      && document.activeElement.tagName !== 'INPUT'
+      && !(window.getSelection && String(window.getSelection()))) {
     e.preventDefault();
     PV.back = !PV.back; renderPreview();
   }
