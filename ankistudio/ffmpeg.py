@@ -37,18 +37,21 @@ def _run(args: list[str]) -> None:
 
 
 def cut_audio(video: Path, start: float, end: float, fmt: str = "mp3",
-              meta: dict | None = None, key_extra: tuple = ()) -> Path:
-    """Cut [start-PAD, end+PAD] (shifted times) as an audio file, cached."""
+              meta: dict | None = None, key_extra: tuple = (),
+              pad: float | None = None) -> Path:
+    """Cut [start-pad, end+pad] (shifted times) as an audio file, cached.
+    Larger pads keep dialogue from being clipped prematurely."""
+    pad = PAD if pad is None else max(0.0, min(5.0, float(pad)))
     meta = meta or {}
-    s = max(0.0, effective_time(start, meta) - PAD)
-    e = effective_time(end, meta) + PAD
+    s = max(0.0, effective_time(start, meta) - pad)
+    e = effective_time(end, meta) + pad
     dur = max(0.3, e - s)
     enc = {"mp3": ["-vn", "-acodec", "libmp3lame", "-q:a", "4"],
            "m4a": ["-vn", "-acodec", "aac", "-b:a", "128k"],
            "wav": ["-vn", "-acodec", "pcm_s16le"],
            "ogg": ["-vn", "-acodec", "libvorbis", "-q:a", "4"]}[fmt]
     out = _cache_path("cut", (str(video), video.stat().st_mtime,
-                              round(s, 2), round(dur, 2), fmt, key_extra), fmt)
+                              round(s, 2), round(dur, 2), fmt, pad, key_extra), fmt)
     if not out.exists():
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         _run(["-ss", f"{s:.3f}", "-t", f"{dur:.3f}", "-i", str(video), *enc,

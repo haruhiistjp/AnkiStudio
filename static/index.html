@@ -87,6 +87,16 @@ form.box input { width:100%; }
 .cardbox .front-label { font-size:10.5px; letter-spacing:.08em; color:var(--muted);
   text-transform:uppercase; margin-bottom:10px; }
 #preview .note { text-align:center; color:var(--muted); font-size:11.5px; margin-top:8px; }
+#dirmodal { display:none; position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.35); }
+#dirmodal.open { display:flex; align-items:center; justify-content:center; }
+#dirmodal .inner { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  min-width:340px; max-width:520px; max-height:70vh; display:flex; flex-direction:column; padding:14px; }
+#dirmodal .path { font-size:12.5px; color:var(--muted); margin-bottom:8px; word-break:break-all; }
+#dirmodal .list { overflow-y:auto; flex:1; }
+#dirmodal .list a { display:block; padding:6px 8px; border-radius:6px; cursor:pointer;
+  text-decoration:none; color:var(--ink); font-size:13.5px; }
+#dirmodal .list a:hover { background:var(--hov); }
+#dirmodal .row { margin-top:10px; }
 </style>
 </head>
 <body>
@@ -115,6 +125,14 @@ form.box input { width:100%; }
   </aside>
   <main id="view"></main>
 </div>
+<div id="dirmodal"><div class="inner">
+  <b>Pick a folder</b>
+  <div class="path" id="dm-path"></div>
+  <div class="list" id="dm-list"></div>
+  <div class="row"><button id="dm-up">← up</button>
+    <button id="dm-here" class="primary">Choose this folder</button>
+    <button id="dm-cancel">Cancel</button></div>
+</div></div>
 <div id="preview">
   <div class="top">
     <button class="primary" id="pv-flip">Show back</button>
@@ -527,6 +545,11 @@ async function showExport() {
       .map(l => `<option>${esc(l)}</option>`).join('') : '');
   f.innerHTML =
     '<label>deck name</label><input id="xname" value="AnkiStudio export">' +
+    '<label>output folder</label>' +
+    '<div class="row" style="margin:0"><input id="xdir" value="result" style="flex:1">' +
+    '<button id="xbrowse">Browse…</button></div>' +
+    '<label>audio padding for video cuts, seconds — keeps dialogue from being clipped</label>' +
+    '<input id="xpad" type="number" step="0.05" min="0" max="5" value="0.35">' +
     '<label>preset (what goes on the card)</label>' +
     '<select id="xpreset"><option value="immersion">immersion — front: image + audio; back: sentence, reading, translation</option>' +
     '<option value="reading">reading — front: sentence; back: reading, translation, audio</option></select>' +
@@ -539,6 +562,7 @@ async function showExport() {
     '<button class="primary" id="xgo" style="margin-top:14px">Build .apkg</button>' +
     '<div id="xres" class="dim" style="margin-top:10px"></div>';
   $('#view').append(f);
+  $('#xbrowse').onclick = () => dmOpen($('#xdir'), $('#xdir').value);
   $('#xgo').onclick = async () => {
     $('#xres').textContent = 'building…';
     try {
@@ -546,12 +570,46 @@ async function showExport() {
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ name: $('#xname').value,
           preset: $('#xpreset').value, status: $('#xstatus').value,
-          source: +$('#xsrc').value, level: $('#xlev').value }) });
+          source: +$('#xsrc').value, level: $('#xlev').value,
+          out_dir: $('#xdir').value, pad: +$('#xpad').value || 0.35 }) });
       $('#xres').innerHTML = `✓ ${r.notes} notes, ${r.media_files} media → ` +
         `<a href="/api/export/file?name=${encodeURIComponent(r.path)}">${esc(r.path.split('/').pop())}</a>`;
     } catch (e) { $('#xres').textContent = 'error: ' + e.message; }
   };
 }
+
+/* ---------- directory browse modal ---------- */
+let DM = { target: null, path: '' };
+async function dmOpen(target, start) {
+  DM.target = target;
+  const d = await api('/api/browse?path=' + encodeURIComponent(start || '~'));
+  dmRender(d);
+  $('#dirmodal').classList.add('open');
+}
+function dmRender(d) {
+  DM.path = d.path;
+  $('#dm-path').textContent = d.path;
+  const list = $('#dm-list');
+  list.innerHTML = '';
+  if (d.parent) {
+    const up = es('a'); up.textContent = '⬆ ..';
+    up.onclick = () => api('/api/browse?path=' + encodeURIComponent(d.parent)).then(dmRender);
+    list.appendChild(up);
+  }
+  for (const name of d.dirs) {
+    const a = es('a'); a.textContent = '📁 ' + name;
+    a.onclick = () => api('/api/browse?path=' +
+      encodeURIComponent(DM.path + '/' + name)).then(dmRender);
+    list.appendChild(a);
+  }
+}
+$('#dm-cancel').onclick = () => $('#dirmodal').classList.remove('open');
+$('#dm-up').onclick = () => api('/api/browse?path=' + encodeURIComponent(DM.path))
+  .then(d => d.parent ? api('/api/browse?path=' + encodeURIComponent(d.parent)) : d).then(dmRender);
+$('#dm-here').onclick = () => {
+  if (DM.target) DM.target.value = DM.path;
+  $('#dirmodal').classList.remove('open');
+};
 
 /* ---------- router ---------- */
 const VIEWS = { stats: showStats, browse: showBrowse,
