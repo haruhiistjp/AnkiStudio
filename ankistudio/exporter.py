@@ -69,7 +69,7 @@ def _ext(name: str, default: str) -> str:
 def build_deck(store, name: str, preset: str = "immersion",
                status: str = "approved", source_id: int = 0,
                level: str = "", out_dir: str | Path = "result",
-               pad: float = 0.35) -> dict:
+               pad: float | None = None) -> dict:
     where, args = ["n.keep=1"], []
     if status == "approved":
         where.append("n.decision='approved'")
@@ -102,8 +102,9 @@ def build_deck(store, name: str, preset: str = "immersion",
             meta = _json.loads(r["source_meta"] or "{}")
             try:
                 start, end = float(r["start"]), float(r["end"])
+                row_pad = pad if pad is not None else meta.get("pad", 0.35)
                 fp = _ff.cut_audio(Path(r["source_path"]), start, end, "mp3",
-                                   meta=meta, pad=pad)
+                                   meta=meta, pad=row_pad)
                 media.append(str(fp))
                 audio_html = f"[sound:{fp.name}]"
                 n_media += 1

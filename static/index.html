@@ -325,11 +325,14 @@ async function showSources() {
   const f = es('div'); f.className = 'box';
   f.innerHTML =
     '<h2 style="font-size:15px">Import Anki deck (.apkg)</h2>' +
-    '<label>path to .apkg (absolute or ~)</label><input id="ipath" placeholder="/path/to/deck.apkg">' +
+    '<label>path to .apkg (absolute or ~)</label>' +
+    '<div class="row" style="margin:0"><input id="ipath" placeholder="/path/to/deck.apkg" style="flex:1">' +
+    '<button id="ibrowse">Browse…</button></div>' +
     '<label>max characters per sentence</label><input id="imax" type="number" value="60">' +
     '<button class="primary" id="igo" style="margin-top:12px">Import</button>' +
     '<div id="msg"></div>';
   $('#view').append(f);
+  $('#ibrowse').onclick = () => dmOpen($('#ipath'), '~', 'apkg');
   $('#igo').onclick = async () => {
     $('#msg').textContent = 'importing…';
     try {
@@ -343,19 +346,28 @@ async function showSources() {
   const vf = es('div'); vf.className = 'box'; vf.style.marginTop = '18px';
   vf.innerHTML =
     '<h2 style="font-size:15px">Import video + subtitles</h2>' +
-    '<label>video file</label><input id="vv" placeholder="/path/to/episode.mp4">' +
-    '<label>subtitles (.srt / .vtt / .ass)</label><input id="vs" placeholder="/path/to/episode.ja.srt">' +
+    '<label>video file</label>' +
+    '<div class="row" style="margin:0"><input id="vv" placeholder="/path/to/episode.mp4" style="flex:1">' +
+    '<button id="vvb">Browse…</button></div>' +
+    '<label>subtitles (.srt / .vtt / .ass)</label>' +
+    '<div class="row" style="margin:0"><input id="vs" placeholder="/path/to/episode.ja.srt" style="flex:1">' +
+    '<button id="vsb">Browse…</button></div>' +
     '<label>global offset, seconds (+ later, − earlier)</label><input id="vo" type="number" step="0.1" value="0">' +
+    '<label>audio padding, seconds — keeps dialogue from being clipped</label>' +
+    '<input id="vpad" type="number" step="0.05" min="0" max="5" value="0.35">' +
     '<button class="primary" id="vgo" style="margin-top:12px">Import</button>' +
     '<div id="vmsg" class="dim" style="margin-top:8px"></div>';
   $('#view').append(vf);
+  $('#vvb').onclick = () => dmOpen($('#vv'), '~', 'mp4,mkv,m4v,avi,mov,webm');
+  $('#vsb').onclick = () => dmOpen($('#vs'), '~', 'srt,vtt,ass');
   $('#vgo').onclick = async () => {
     $('#vmsg').textContent = 'importing…';
     try {
       const r = await api('/api/import/video', { method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ video: $('#vv').value, subs: $('#vs').value,
-                               offset: +$('#vo').value }) });
+                               offset: +$('#vo').value,
+                               pad: +$('#vpad').value || 0.35 }) });
       $('#vmsg').textContent = `imported: ${r.cues} cues, ${r.kept} kept`;
       setTimeout(showSources, 1200);
     } catch (e) { $('#vmsg').textContent = 'error: ' + e.message; }
@@ -374,6 +386,7 @@ async function showSources() {
         '<p class="hint">Cue times are originals; shifts apply when audio is cut. ' +
         'Each segment = "from this cue time on, the TOTAL shift is X seconds".</p>' +
         '<label>global offset (s)</label><input class="voff" type="number" step="0.1">' +
+        '<label>audio padding (s)</label><input class="vpad" type="number" step="0.05" min="0" max="5">' +
         '<div class="segs"></div>' +
         '<div class="row" style="margin-top:8px">' +
         '<button class="addseg">+ segment</button>' +
@@ -388,6 +401,7 @@ async function showSources() {
 async function loadShift(box, sid) {
   const meta = await api(`/api/video/${sid}`);
   box.querySelector('.voff').value = meta.offset || 0;
+  box.querySelector('.vpad').value = meta.pad != null ? meta.pad : 0.35;
   const segs = box.querySelector('.segs');
   const addSeg = (at = '', shift = '') => {
     const r = es('div'); r.className = 'row'; r.style.marginTop = '6px';
@@ -406,7 +420,8 @@ async function loadShift(box, sid) {
     const r = await api(`/api/video/${sid}/shift`, { method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ offset: +box.querySelector('.voff').value || 0,
-                             segments }) });
+                             segments,
+                             pad: +box.querySelector('.vpad').value }) });
     box.querySelector('.msg').textContent = 'saved ✓';
   };
 }
@@ -419,12 +434,14 @@ async function showLexicons() {
   f.innerHTML =
     '<h2 style="font-size:15px">Import frequency list</h2>' +
     '<label>path — .tsv/.csv (word, level, rank) or an .apkg deck like Kaishi</label>' +
-    '<input id="lpath" placeholder="/path/to/list.tsv or kaishi.apkg">' +
+    '<div class="row" style="margin:0"><input id="lpath" placeholder="/path/to/list.tsv or kaishi.apkg" style="flex:1">' +
+    '<button id="lbrowse">Browse…</button></div>' +
     '<button class="primary" id="lgo" style="margin-top:12px">Import</button>' +
     '<div id="msg"></div>' +
     '<p class="hint">Levels power the level filter in the card browser ' +
     '(a sentence shows at the easiest level whose words it contains).</p>';
   $('#view').append(f);
+  $('#lbrowse').onclick = () => dmOpen($('#lpath'), '~', 'tsv,csv,apkg,txt');
   $('#lgo').onclick = async () => {
     const p = $('#lpath').value;
     const url = p.endsWith('.apkg') ? '/api/import/freq-apkg' : '/api/import/freq-tsv';
@@ -548,8 +565,8 @@ async function showExport() {
     '<label>output folder</label>' +
     '<div class="row" style="margin:0"><input id="xdir" value="result" style="flex:1">' +
     '<button id="xbrowse">Browse…</button></div>' +
-    '<label>audio padding for video cuts, seconds — keeps dialogue from being clipped</label>' +
-    '<input id="xpad" type="number" step="0.05" min="0" max="5" value="0.35">' +
+    '<label>audio padding for video cuts, seconds — blank = each source\'s own setting</label>' +
+    '<input id="xpad" type="number" step="0.05" min="0" max="5" placeholder="source default">' +
     '<label>preset (what goes on the card)</label>' +
     '<select id="xpreset"><option value="immersion">immersion — front: image + audio; back: sentence, reading, translation</option>' +
     '<option value="reading">reading — front: sentence; back: reading, translation, audio</option></select>' +
@@ -571,7 +588,8 @@ async function showExport() {
         body: JSON.stringify({ name: $('#xname').value,
           preset: $('#xpreset').value, status: $('#xstatus').value,
           source: +$('#xsrc').value, level: $('#xlev').value,
-          out_dir: $('#xdir').value, pad: +$('#xpad').value || 0.35 }) });
+          out_dir: $('#xdir').value,
+          pad: $('#xpad').value === '' ? null : +$('#xpad').value }) });
       $('#xres').innerHTML = `✓ ${r.notes} notes, ${r.media_files} media → ` +
         `<a href="/api/export/file?name=${encodeURIComponent(r.path)}">${esc(r.path.split('/').pop())}</a>`;
     } catch (e) { $('#xres').textContent = 'error: ' + e.message; }
@@ -579,12 +597,18 @@ async function showExport() {
 }
 
 /* ---------- directory browse modal ---------- */
-let DM = { target: null, path: '' };
-async function dmOpen(target, start) {
+let DM = { target: null, path: '', exts: '' };
+async function dmOpen(target, start, exts) {
   DM.target = target;
-  const d = await api('/api/browse?path=' + encodeURIComponent(start || '~'));
+  DM.exts = exts || '';
+  const d = await api('/api/browse?path=' + encodeURIComponent(start || '~') +
+    (DM.exts ? '&exts=' + encodeURIComponent(DM.exts) : ''));
   dmRender(d);
   $('#dirmodal').classList.add('open');
+}
+function dmBrowse(path) {
+  return api('/api/browse?path=' + encodeURIComponent(path) +
+    (DM.exts ? '&exts=' + encodeURIComponent(DM.exts) : ''));
 }
 function dmRender(d) {
   DM.path = d.path;
@@ -593,19 +617,26 @@ function dmRender(d) {
   list.innerHTML = '';
   if (d.parent) {
     const up = es('a'); up.textContent = '⬆ ..';
-    up.onclick = () => api('/api/browse?path=' + encodeURIComponent(d.parent)).then(dmRender);
+    up.onclick = () => dmBrowse(d.parent).then(dmRender);
     list.appendChild(up);
   }
   for (const name of d.dirs) {
     const a = es('a'); a.textContent = '📁 ' + name;
-    a.onclick = () => api('/api/browse?path=' +
-      encodeURIComponent(DM.path + '/' + name)).then(dmRender);
+    a.onclick = () => dmBrowse(DM.path + '/' + name).then(dmRender);
+    list.appendChild(a);
+  }
+  for (const name of (d.files || [])) {
+    const a = es('a'); a.textContent = '📄 ' + name;
+    a.onclick = () => { DM.target.value = DM.path + '/' + name;
+                        $('#dirmodal').classList.remove('open'); };
     list.appendChild(a);
   }
 }
 $('#dm-cancel').onclick = () => $('#dirmodal').classList.remove('open');
-$('#dm-up').onclick = () => api('/api/browse?path=' + encodeURIComponent(DM.path))
-  .then(d => d.parent ? api('/api/browse?path=' + encodeURIComponent(d.parent)) : d).then(dmRender);
+$('#dm-up').onclick = async () => {
+  const d = await dmBrowse(DM.path);
+  if (d.parent) dmBrowse(d.parent).then(dmRender);
+};
 $('#dm-here').onclick = () => {
   if (DM.target) DM.target.value = DM.path;
   $('#dirmodal').classList.remove('open');

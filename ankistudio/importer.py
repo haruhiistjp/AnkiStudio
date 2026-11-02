@@ -188,7 +188,8 @@ def import_freq_apkg(store: Store, path: str | Path, name: str | None = None,
 
 
 def import_video(store, video_path: str | Path, subs_path: str | Path,
-                 offset: float = 0.0, name: str | None = None) -> dict:
+                 offset: float = 0.0, pad: float = 0.35,
+                 name: str | None = None) -> dict:
     """Index a video + subtitles pair. Cue times are stored ORIGINAL;
     the global offset and any later shift segments live in sources.meta
     and are applied at media-cut time (no re-import needed)."""
@@ -200,7 +201,7 @@ def import_video(store, video_path: str | Path, subs_path: str | Path,
     src_id = store.add_source(
         "video", name or video_path.stem, str(video_path),
         {"video": str(video_path), "subs": str(subs_path), "subs_name":
-         subs_path.name, "offset": offset, "segments": []})
+         subs_path.name, "offset": offset, "pad": pad, "segments": []})
     rows = []
     for i, (start, end, text) in enumerate(cues, 1):
         code, flags = classify_quality(text, MAX_CHARS)
