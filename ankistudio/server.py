@@ -54,6 +54,8 @@ class ExportReq(BaseModel):
     status: str = "approved"       # approved | pending | all
     source: int = 0
     level: str = ""
+    out_dir: str = "result"
+    pad: float = 0.35              # audio padding seconds for video cuts
 
 from .importer import import_apkg, import_freq_apkg, import_freq_tsv
 from .store import Store
@@ -265,10 +267,32 @@ def create_app(db_path: str | Path) -> FastAPI:
         if req.preset not in ("immersion", "reading"):
             raise HTTPException(400, "preset must be immersion|reading")
         res = build_deck(store, req.name, req.preset, req.status,
-                         req.source, req.level)
+                         req.source, req.level, out_dir=req.out_dir,
+                         pad=max(0.0, min(5.0, req.pad)))
         if "error" in res:
             raise HTTPException(400, res["error"])
         return res
+
+    @app.get("/api/browse")
+    def browse(path: str = "~"):
+        """List directories (for the export destination picker)."""
+        p = Path(path).expanduser()
+        try:
+            if p.is_dir():
+                p = p.resolve()
+        except OSError:
+            pass
+        if not p.is_dir():
+            p = Path.home()
+        dirs = []
+        try:
+            for e in sorted(p.iterdir(), key=lambda x: x.name.lower()):
+                if e.is_dir() and not e.name.startswith("."):
+                    dirs.append(e.name)
+        except PermissionError:
+            pass
+        return {"path": str(p), "parent": str(p.parent) if p.parent != p else "",
+                "dirs": dirs}
 
     @app.get("/api/export/file")
     def export_file(name: str):
@@ -276,7 +300,7 @@ def create_app(db_path: str | Path) -> FastAPI:
         p = Path(name)
         if not p.is_absolute():
             p = Path.cwd() / p
-        if not p.exists() or p.parent.name not in ("result",):
+        if not p.exists():
             raise HTTPException(404, "no such export")
         return FileResponse(p, filename=p.name)
 
