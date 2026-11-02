@@ -8,6 +8,12 @@
 :root { --bg:#fafaf8; --side:#f2f1ec; --ink:#213547; --muted:#6b7280;
   --accent:#b3261e; --line:#e5e7eb; --card:#fff; --ok:#137a3c; --warn:#b26a00;
   --bad:#c23; }
+html.dark { --bg:#161619; --side:#1c1c20; --ink:#e5e7eb; --muted:#9ca3af;
+  --accent:#e57373; --line:#2d2d33; --card:#202024; }
+html.nord { --bg:#2e3440; --side:#292e39; --ink:#eceff4; --muted:#9aa5b8;
+  --accent:#88c0d0; --line:#3b4252; --card:#353c4a; }
+html.solar { --bg:#fdf6e3; --side:#f3ecd8; --ink:#586e75; --muted:#93a1a1;
+  --accent:#cb4b16; --line:#eee8d5; --card:#faf3e2; }
 * { box-sizing: border-box; }
 body { margin:0; font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
   color:var(--ink); background:var(--bg); }
@@ -58,6 +64,26 @@ form.box input { width:100%; }
 .pager { display:flex; gap:8px; align-items:center; margin-top:12px; }
 .hint { color:var(--muted); font-size:12.5px; }
 .check { width:16px; height:16px; }
+#themeSel { margin:18px 8px 0; width:calc(100% - 16px); }
+/* Anki-style card preview panel */
+#preview { display:none; position:fixed; left:0; right:0; bottom:0; z-index:40;
+  background:var(--side); border-top:2px solid var(--accent);
+  box-shadow:0 -8px 30px rgba(0,0,0,.25); padding:12px 18px 16px; }
+#preview.open { display:block; }
+#preview .top { display:flex; gap:10px; align-items:center; margin-bottom:10px;
+  flex-wrap:wrap; }
+#preview .meta { color:var(--muted); font-size:12.5px; }
+#preview .spacer { flex:1; }
+.cardbox { background:var(--card); border:1px solid var(--line); border-radius:10px;
+  max-width:640px; margin:0 auto; padding:26px 22px; text-align:center; min-height:150px; }
+.cardbox .jp { font-size:26px; line-height:1.8; }
+.cardbox .rd { color:var(--muted); font-size:15px; margin-top:8px; }
+.cardbox .tr { font-size:16px; margin-top:14px; color:var(--ink); }
+.cardbox img { max-width:420px; max-height:200px; border-radius:8px; margin-bottom:12px; }
+.cardbox audio { display:block; margin:12px auto 0; width:100%; max-width:420px; }
+.cardbox .front-label { font-size:10.5px; letter-spacing:.08em; color:var(--muted);
+  text-transform:uppercase; margin-bottom:10px; }
+#preview .note { text-align:center; color:var(--muted); font-size:11.5px; margin-top:8px; }
 </style>
 </head>
 <body>
@@ -75,8 +101,26 @@ form.box input { width:100%; }
     <a class="dim">Vocabulary flow</a>
     <a class="dim">Grammar flow</a>
     <a class="dim">AI settings</a>
+    <select id="themeSel" title="theme">
+      <option value="auto">Auto theme</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+      <option value="nord">Nord</option>
+      <option value="solar">Solarized</option>
+    </select>
   </aside>
   <main id="view"></main>
+</div>
+<div id="preview">
+  <div class="top">
+    <button class="primary" id="pv-flip">Show back</button>
+    <button id="pv-close">✕ Close</button>
+    <span class="meta" id="pv-meta"></span>
+    <span class="spacer"></span>
+    <span class="meta">click card or press Space to flip</span>
+  </div>
+  <div class="cardbox" id="pv-card"></div>
+  <div class="note">editor info only — not part of the card</div>
 </div>
 <script>
 'use strict';
@@ -195,6 +239,10 @@ async function loadPage(p) {
     (d.rows.length ? d.rows.map(r => browseRow(r)).join('')
       : `<tr><td colspan="6" class="dim" style="text-align:center;padding:20px">
          no sentences — import a deck in Sources</td></tr>`);
+  const byId = Object.fromEntries(d.rows.map(r => [r.id, r]));
+  for (const el of t.querySelectorAll('[data-pv]')) {
+    el.onclick = () => openPreview(byId[+el.dataset.pv]);
+  }
   for (const b of t.querySelectorAll('button[data-dec]')) {
     b.onclick = async () => {
       await api('/api/decide', { method: 'POST', headers: {'Content-Type':'application/json'},
@@ -300,6 +348,67 @@ async function showLexicons() {
     $('#view').append(t);
   }
 }
+
+/* ---------- theme ---------- */
+const THEME_KEY = 'asTheme';
+function applyTheme(pref) {
+  const eff = pref === 'auto'
+    ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    : pref;
+  const root = document.documentElement;
+  for (const c of ['dark', 'nord', 'solar'])
+    root.classList.remove(c);
+  if (eff !== 'light') root.classList.add(eff);
+  localStorage.setItem(THEME_KEY, pref);
+  const sel = $('#themeSel');
+  if (sel) sel.value = pref;
+}
+$('#themeSel').onchange = () => applyTheme($('#themeSel').value);
+applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
+
+/* ---------- Anki-style card preview ---------- */
+let PV = { row: null, back: false };
+function openPreview(row) {
+  PV = { row, back: false };
+  $('#preview').classList.add('open');
+  renderPreview();
+}
+function closePreview() {
+  $('#preview').classList.remove('open');
+  PV = { row: null, back: false };
+}
+function renderPreview() {
+  const r = PV.row;
+  if (!r) return;
+  $('#pv-meta').textContent =
+    `${r.source_name}${r.episode ? ' · ep ' + r.episode : ''} · ${r.char_len} chars` +
+    (r.drop_code ? ` · ⚠ dropped (${r.drop_code})` : '') +
+    (r.decision === 'approved' ? ' · ✓ approved' :
+     r.decision === 'discarded' ? ' · ✕ discarded' : '');
+  $('#pv-flip').textContent = PV.back ? 'Show front' : 'Show back';
+  const img = r.media_image
+    ? `<img src="/api/media/${r.id}/image?v=${r.id}" alt="">` : '';
+  const au = r.media_audio
+    ? `<audio controls preload="none" src="/api/media/${r.id}/audio?v=${r.id}"></audio>` : '';
+  const back = PV.back
+    ? `${r.reading ? `<div class="rd">${esc(r.reading)}</div>` : ''}` +
+      `${r.translation ? `<div class="tr">${esc(r.translation)}</div>` : ''}` : '';
+  $('#pv-card').innerHTML =
+    `<div class="front-label">${PV.back ? 'Back' : 'Front'}</div>` +
+    img + au +
+    `<div class="jp">${esc(r.text)}</div>` + back;
+}
+$('#pv-close').onclick = closePreview;
+$('#pv-flip').onclick = () => { PV.back = !PV.back; renderPreview(); };
+$('#pv-card').onclick = () => { PV.back = !PV.back; renderPreview(); };
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && $('#preview').classList.contains('open')
+      && document.activeElement.tagName !== 'INPUT') {
+    e.preventDefault();
+    PV.back = !PV.back; renderPreview();
+  }
+  if (e.key === 'Escape') closePreview();
+});
 
 /* ---------- router ---------- */
 const VIEWS = { stats: showStats, browse: showBrowse,

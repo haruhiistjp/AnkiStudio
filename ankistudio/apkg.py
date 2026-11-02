@@ -92,6 +92,43 @@ SQLITE_MAGIC = b"SQLite format 3\x00"
 _DB_MEMBER_ORDER = ("collection.anki21b", "collection.anki21", "collection.anki2")
 
 
+def read_media_map(path: str | Path) -> dict[str, str]:
+    """Just the media map (entry -> filename) without loading the database —
+    for serving single media files on demand."""
+    with zipfile.ZipFile(path) as z:
+        media_raw = z.read("media")
+    if media_raw[:4] == ZSTD_MAGIC:
+        return _parse_media_protobuf(_zstd_decompress(media_raw))
+    try:
+        return json.loads(media_raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _parse_media_protobuf(media_raw)
+
+
+def read_media_file(path: str | Path, filename: str) -> tuple[bytes, str]:
+    """(bytes, zip-entry-name) for a stored media filename, or (b'', entry)."""
+    entry = None
+    for k, v in read_media_map(path).items():
+        if v == filename:
+            entry = k
+            break
+    if entry is None:
+        # some formats store entries under their real names directly
+        entry = filename
+    with zipfile.ZipFile(path) as z:
+        try:
+            data = z.read(entry)
+        except KeyError:
+            return b"", entry
+    # newer Anki formats zstd-compress individual media entries
+    if data[:4] == ZSTD_MAGIC:
+        try:
+            data = _zstd_decompress(data)
+        except Exception:
+            pass
+    return data, entry
+
+
 @dataclass
 class DeckReader:
     path: Path
