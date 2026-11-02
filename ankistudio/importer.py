@@ -23,15 +23,18 @@ EP_FIELDS = ["id", "number", "source", "episode", "source_id"]
 
 def default_level_order(levels: list[str]) -> list[str]:
     """Order levels easy -> hard. JLPT-style N5..N1 sorts by DESCENDING
-    number (N5 easiest); A1..C2 / numeric styles sort ascending."""
+    number (N5 easiest); A1..C2 / numeric styles sort ascending. Stray
+    non-conforming level strings (import noise) sort last."""
     import re as _re
-    ns = [l for l in levels if _re.fullmatch(r"N\d+", l.strip().upper())]
-    if ns and len(ns) == len(levels):
-        return sorted(levels, key=lambda l: -int(l[1:]))
+    uniq = list(dict.fromkeys(levels))
+    ns = [l for l in uniq if _re.fullmatch(r"N\d+", l.strip().upper())]
+    if ns and len(ns) >= max(1, int(len(uniq) * 0.8)):
+        rest = [l for l in uniq if l not in ns]
+        return sorted(ns, key=lambda l: -int(l[1:])) + rest
     def sort_key(l):
         m = _re.search(r"\d+", l)
         return (int(m.group()) if m else 999, l)
-    return sorted(levels, key=sort_key)
+    return sorted(uniq, key=sort_key)
 
 KANA_KANJI = re.compile(r"[\u3040-\u30ff\u4e00-\u9faf]")
 ASCII_WORDS = re.compile(r"[A-Za-z]{4,}")          # 4+ latin letters = suspicious

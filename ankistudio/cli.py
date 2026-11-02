@@ -26,6 +26,9 @@ def main() -> int:
     p_frq.add_argument("--format", choices=["tsv", "apkg"], default=None,
                        help="default: guessed from the extension")
 
+    p_cls = sub.add_parser("classify", help="compute sentence levels from a lexicon")
+    p_cls.add_argument("--lexicon", type=int, default=None,
+                       help="lexicon id (default: first)")
     sub.add_parser("stats", help="print store statistics as JSON")
     p_srv = sub.add_parser("serve", help="run the local web app")
     p_srv.add_argument("--port", type=int, default=8796)
@@ -57,6 +60,19 @@ def main() -> int:
             "select count(*) c from lexicon_words where lexicon_id=?",
             (lid,)).fetchone()["c"]
         print(f"lexicon #{lid}: {n} words")
+        store.close()
+        return 0
+
+    if args.cmd == "classify":
+        from .classify import classify_store
+        from .store import Store
+        store = Store(db)
+        lex = store.db.execute(
+            "select id from lexicons order by id").fetchall()
+        if not lex:
+            print("no lexicons imported yet (see `ankistudio freq`)"); return 1
+        lid = args.lexicon or lex[0]["id"]
+        print(classify_store(store, lid))
         store.close()
         return 0
 
