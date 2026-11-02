@@ -21,6 +21,11 @@ def main() -> int:
     p_imp.add_argument("paths", nargs="+")
     p_imp.add_argument("--max-chars", type=int, default=60)
 
+    p_vid = sub.add_parser("import-video", help="index a video + subtitles pair")
+    p_vid.add_argument("video")
+    p_vid.add_argument("subs")
+    p_vid.add_argument("--offset", type=float, default=0.0)
+
     p_frq = sub.add_parser("freq", help="import a frequency list (tsv or apkg)")
     p_frq.add_argument("path")
     p_frq.add_argument("--format", choices=["tsv", "apkg"], default=None,
@@ -46,6 +51,15 @@ def main() -> int:
             summary = import_apkg(store, p, max_chars=args.max_chars)
             print(f"{p}: {summary['notes']} notes, {summary['kept']} kept, "
                   f"drops={summary['drops']}")
+        store.close()
+        return 0
+
+    if args.cmd == "import-video":
+        from .importer import import_video
+        from .store import Store
+        store = Store(db)
+        r = import_video(store, args.video, args.subs, offset=args.offset)
+        print(f"{args.video}: {r['cues']} cues, {r['kept']} kept")
         store.close()
         return 0
 

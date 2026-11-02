@@ -80,8 +80,10 @@ def build_deck(store, name: str, preset: str = "immersion",
         where.append("n.source_id=?"); args.append(source_id)
     if level:
         where.append("n.level=?"); args.append(level)
+    import json as _json
     rows = store.db.execute(
-        f"select n.*, s.name source_name, s.path source_path from sentences n"
+        f"select n.*, s.name source_name, s.path source_path, s.kind source_kind,"
+        f" s.meta source_meta from sentences n"
         f" join sources s on s.id=n.source_id where {' and '.join(where)}"
         f" order by n.id", args).fetchall()
     if not rows:
@@ -92,8 +94,30 @@ def build_deck(store, name: str, preset: str = "immersion",
                         name or "AnkiStudio export")
     media: list[str] = []
     n_media = 0
+    from . import ffmpeg as _ff
     for r in rows:
         img_html = audio_html = ""
+        if r["source_kind"] == "video":
+            meta = _json.loads(r["source_meta"] or "{}")
+            try:
+                start, end = float(r["start"]), float(r["end"])
+                fp = _ff.cut_audio(Path(r["source_path"]), start, end, "mp3", meta=meta)
+                media.append(str(fp))
+                audio_html = f"[sound:{fp.name}]"
+                n_media += 1
+                fp = _ff.grab_frame(Path(r["source_path"]), start + (end - start) * 0.4, meta=meta)
+                media.append(str(fp))
+                img_html = f'<img src="{fp.name}">'
+                n_media += 1
+            except Exception:
+                pass
+            src = f"{r['source_name']}{(' · ep ' + r['episode']) if r['episode'] else ''}"
+            deck.add_note(genanki.Note(
+                guid=genanki.guid_for("as", r["id"]),
+                model=model,
+                fields=[r["text"] or "", r["reading"] or "", r["translation"] or "",
+                        img_html, audio_html, src]))
+            continue
         try:
             if r["media_image"] and r["source_path"]:
                 data, _ = image_bytes(r["source_path"], r["media_image"])

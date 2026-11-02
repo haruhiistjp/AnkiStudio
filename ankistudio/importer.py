@@ -185,3 +185,34 @@ def import_freq_apkg(store: Store, path: str | Path, name: str | None = None,
     lid = store.add_lexicon(name or path.stem, words, level_order)
     reader.close()
     return lid
+
+
+def import_video(store, video_path: str | Path, subs_path: str | Path,
+                 offset: float = 0.0, name: str | None = None) -> dict:
+    """Index a video + subtitles pair. Cue times are stored ORIGINAL;
+    the global offset and any later shift segments live in sources.meta
+    and are applied at media-cut time (no re-import needed)."""
+    from . import subs as subs_mod
+    video_path, subs_path = Path(video_path), Path(subs_path)
+    cues = subs_mod.parse(subs_path)
+    if not cues:
+        raise ValueError("no cues parsed from the subtitle file")
+    src_id = store.add_source(
+        "video", name or video_path.stem, str(video_path),
+        {"video": str(video_path), "subs": str(subs_path), "subs_name":
+         subs_path.name, "offset": offset, "segments": []})
+    rows = []
+    for i, (start, end, text) in enumerate(cues, 1):
+        code, flags = classify_quality(text, MAX_CHARS)
+        rows.append({
+            "source_id": src_id, "ref": str(i),
+            "text": text, "reading": "", "translation": "",
+            "episode": "", "start": f"{start:.3f}", "end": f"{end:.3f}",
+            "media_audio": "cut", "media_image": "frame",
+            "char_len": len(re.sub(r"\W", "", text, flags=re.UNICODE)),
+            "flags": flags, "keep": 0 if code else 1,
+            "drop_code": code or "", "known": "{}",
+        })
+    store.add_sentences(src_id, rows)
+    return {"source_id": src_id, "cues": len(rows),
+            "kept": sum(1 for r in rows if r["keep"])}

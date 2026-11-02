@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import subprocess as _sp
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -33,6 +34,18 @@ class DecideReq(BaseModel):
 
 class ClassifyReq(BaseModel):
     lexicon_id: int
+
+
+class VideoReq(BaseModel):
+    video: str
+    subs: str
+    offset: float = 0.0
+    name: str | None = None
+
+
+class ShiftReq(BaseModel):
+    offset: float = 0.0
+    segments: list[dict] = []      # [{at: seconds, shift: seconds}] absolute
 
 
 class ExportReq(BaseModel):
@@ -131,22 +144,94 @@ def create_app(db_path: str | Path) -> FastAPI:
                 "rows": rows[start:start + per]}
 
 
+    @app.post("/api/import/video")
+    def import_video_ep(req: VideoReq):
+        from .importer import import_video as _iv
+        v, b = Path(req.video).expanduser(), Path(req.subs).expanduser()
+        if not v.exists():
+            raise HTTPException(404, f"no video: {v}")
+        if not b.exists():
+            raise HTTPException(404, f"no subtitles: {b}")
+        try:
+            return _iv(store, v, b, offset=req.offset, name=req.name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/video/{sid}")
+    def video_meta(sid: int):
+        r = store.db.execute("select meta from sources where id=?", (sid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "no such source")
+        import json as _j
+        return _j.loads(r["meta"] or "{}")
+
+    @app.post("/api/video/{sid}/shift")
+    def video_shift(sid: int, req: ShiftReq):
+        import json as _j
+        r = store.db.execute("select meta from sources where id=?", (sid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "no such source")
+        meta = _j.loads(r["meta"] or "{}")
+        meta["offset"] = req.offset
+        meta["segments"] = sorted(req.segments, key=lambda g: g.get("at", 0))
+        store.db.execute("update sources set meta=? where id=?",
+                         (_j.dumps(meta), sid))
+        store.db.commit()
+        return meta
+
     @app.get("/api/media/{sid}/{kind}")
-    def media(sid: int, kind: str):
-        """Serve a sentence's audio/image straight out of its source .apkg."""
+    def media(sid: int, kind: str, fmt: str = ""):
+        """Serve a sentence's audio/image from its source .apkg — or, for
+        video sources, cut it on the fly with ffmpeg. ?fmt= transcodes
+        audio (mp3|m4a|wav|ogg) for Save-as."""
         import zipfile as _zip
         from fastapi.responses import Response
         from .apkg import read_media_file
         if kind not in ("audio", "image"):
             raise HTTPException(400, "kind must be audio|image")
         r = store.db.execute(
-            "select n.media_audio, n.media_image, s.path from sentences n"
+            "select n.*, s.path, s.kind, s.meta from sentences n"
             " join sources s on s.id=n.source_id where n.id=?", (sid,)).fetchone()
         if not r or not r["path"]:
             raise HTTPException(404, "no source file")
+        if r["kind"] == "video":
+            import json as _j
+            from . import ffmpeg as _ff
+            meta = _j.loads(r["meta"] or "{}")
+            video = Path(r["path"])
+            if not video.exists():
+                raise HTTPException(410, "video moved or deleted")
+            try:
+                start, end = float(r["start"]), float(r["end"])
+            except (TypeError, ValueError):
+                raise HTTPException(404, "cue has no timing")
+            try:
+                if kind == "audio":
+                    ext = fmt if fmt in ("mp3", "m4a", "wav", "ogg") else "mp3"
+                    p = _ff.cut_audio(video, start, end, ext, meta=meta)
+                    return FileResponse(p, filename=f"as-{sid}.{ext}",
+                                        headers={"Cache-Control": "private, max-age=3600"})
+                p = _ff.grab_frame(video, start + (end - start) * 0.4, meta=meta)
+                return FileResponse(p, media_type="image/jpeg",
+                                    headers={"Cache-Control": "private, max-age=3600"})
+            except _sp.CalledProcessError:
+                raise HTTPException(500, "ffmpeg failed")
         fname = r["media_audio"] if kind == "audio" else r["media_image"]
         if not fname:
             raise HTTPException(404, f"no {kind} on this sentence")
+        if kind == "audio" and fmt in ("mp3", "m4a", "wav", "ogg"):
+            from .ffmpeg import transcode_audio
+            raw, _ = read_media_file(r["path"], fname)
+            src_ext = (fname.rsplit(".", 1)[-1] or "").lower()
+            try:
+                data = transcode_audio(raw, src_ext, fmt) if src_ext != fmt else raw
+            except Exception:
+                raise HTTPException(500, "ffmpeg transcode failed")
+            ct = {"mp3": "audio/mpeg", "m4a": "audio/mp4",
+                  "wav": "audio/wav", "ogg": "audio/ogg"}[fmt]
+            return Response(content=data, media_type=ct,
+                            headers={"Content-Disposition":
+                                     f'attachment; filename="as-{sid}.{fmt}"'})
         try:
             if kind == "image":
                 from .media import image_bytes
