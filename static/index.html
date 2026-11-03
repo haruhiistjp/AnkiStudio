@@ -1242,12 +1242,21 @@ async function showDeck() {
         `<div class="meta">${esc(it.source_name)}${it.episode ? ' · ep ' + it.episode : ''} · ${it.char_len} chars</div></div>` +
         `<input class="note" placeholder="note / explanation (on card back)" value="${esc(it.note || '')}">` +
         `<button class="up">↑</button><button class="dn">↓</button>` +
+        `<button class="mv" title="move to another point">⇄</button>` +
         `<button class="no rm">✕</button>`;
       g.appendChild(row);
       row.querySelector('.note').onchange = async (e) => {
         await api(`/api/deck/${it.id}`, { method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ note: e.target.value }) });
+      };
+      row.querySelector('.mv').onclick = () => {
+        ptOpen(async (newPoint) => {
+          await api(`/api/deck/${it.id}`, { method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ point: newPoint }) });
+          showDeck();
+        }, it.point);
       };
       row.querySelector('.rm').onclick = async () => {
         await api(`/api/deck/${it.id}`, { method: 'DELETE' });
