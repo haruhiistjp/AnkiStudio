@@ -84,6 +84,12 @@ class ProjectOpenReq(BaseModel):
     path: str
 
 
+class PoolDecideReq(BaseModel):
+    sentence_id: int
+    context: str = "global"        # 'global' or 'point:GP-XXX'
+    decision: str                   # 'approved' | 'discarded' | ''
+
+
 class ClassifyReq(BaseModel):
     lexicon_id: int
 
@@ -616,6 +622,9 @@ def create_app(db_path: str | Path) -> FastAPI:
             f"select n.*, s.name source_name from sentences n"
             f" join sources s on s.id=n.source_id where {' and '.join(where)}",
             args)]
+        context = f"point:{req.point}" if req.point else "global"
+        excluded = store.excluded_for(context)
+        rows = [r for r in rows if r["id"] not in excluded]
         if req.exclude_deck:
             in_deck = {r["sentence_id"] for r in store.db.execute(
                 "select sentence_id from deck_items")}
@@ -720,6 +729,37 @@ def create_app(db_path: str | Path) -> FastAPI:
         store.reopen(dest_dir / "project.db")
         return {"opened": str(p), "name": manifest.get("name"),
                 "sources": len(manifest.get("sources", []))}
+
+    # ---------- projects ----------
+
+    @app.get("/api/projects")
+    def projects_list():
+        """All .aproj files in data/projects/ + the live db."""
+        import glob as _g
+        projs = []
+        for f in sorted(Path("data/projects").glob("*.aproj")):
+            try:
+                import zipfile as _z, json as _j
+                with _z.ZipFile(f) as z:
+                    m = _j.loads(z.read("manifest.json"))
+                projs.append({"file": str(f), "name": m.get("name", f.stem),
+                              "points": m.get("points"), "sentences": m.get("sentences"),
+                              "converter": m.get("converter", "")})
+            except Exception:
+                projs.append({"file": str(f), "name": f.stem, "error": True})
+        # the live db is also a project (unsaved)
+        live_name = store.get_setting("project_name", "working project")
+        return {"projects": projs, "current": {
+            "name": live_name, "live": True,
+            "sources": len(store.sources()),
+            "points": len(store.points())}}
+
+    @app.post("/api/pool-decide")
+    def pool_decide(req: PoolDecideReq):
+        if req.decision not in ("approved", "discarded", ""):
+            raise HTTPException(400, "decision must be approved|discarded|''")
+        store.pool_decide(req.sentence_id, req.context, req.decision)
+        return {"ok": True}
 
     @app.post("/api/classify")
     def classify(req: ClassifyReq):

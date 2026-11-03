@@ -115,12 +115,28 @@ form.box input { width:100%; }
   color:var(--ink); font-size:12px; padding:4px 6px; width:220px; }
 .drow button { padding:3px 8px; font-size:12px; }
 
+/* projects + deck redactor */
+.projrow { display:flex; gap:10px; align-items:center; padding:12px;
+  border:1px solid var(--line); border-radius:10px; margin-bottom:8px; background:var(--card); }
+.projrow.current { border-left:3px solid var(--accent); }
+.projrow .info { flex:1; } .projrow .name { font-weight:600; font-size:14px; }
+.projrow .meta { color:var(--muted); font-size:12px; }
+.block { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  padding:14px 16px; margin-bottom:14px; }
+.block h3 { margin:0 0 4px; font-size:15px; display:flex; align-items:baseline; gap:8px; }
+.block .pattern { font-size:13px; color:var(--muted); }
+.block .fillinfo { font-size:12px; color:var(--accent); margin-left:auto; }
+.block.empty { opacity:.6; border-style:dashed; }
+.block .cards { margin-top:10px; }
+
 </style>
 </head>
 <body>
 <div id="layout">
   <aside id="side">
     <h1>AnkiStudio</h1>
+    <div class="sect">Project</div>
+    <a data-view="projects">Projects</a>
     <div class="sect">Workbench</div>
     <a data-view="stats" class="active">Statistics</a>
     <a data-view="browse">Card browser</a>
@@ -885,7 +901,38 @@ function whisperFail(el, e, retry) {
   el.append(t, inst);
 }
 
-/* ---------- router ---------- */
+/* router */
+
+async function showProjects() {
+  const d = await api('/api/projects');
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Projects</h2>'; $('#view').append(h);
+  const cur = es('div'); cur.className = 'projrow current';
+  cur.innerHTML = '<div class="info"><div class="name">Current: ' + esc(d.current.name) + '</div>' +
+    '<div class="meta">' + d.current.sources + ' sources / ' + d.current.points + ' points</div></div>' +
+    '<button class="primary" id="prj-save-here">Save as .aproj</button>';
+  $('#view').append(cur);
+  $('#prj-save-here').onclick = async () => {
+    const r = await api('/api/project/save?name=' + d.current.name);
+    showProjects();
+  };
+  for (const proj of d.projects) {
+    const row = es('div'); row.className = 'projrow';
+    row.innerHTML = '<div class="info"><div class="name">' + esc(proj.name) + '</div>' +
+      '<div class="meta">' + (proj.points||'?') + ' pts / ' + (proj.sentences||'?') + ' sentences' +
+      (proj.converter ? ' from ' + proj.converter : '') + '</div></div>' +
+      '<button class="primary">Open</button>';
+    $('#view').append(row);
+    row.querySelector('button').onclick = async () => {
+      row.querySelector('button').textContent = 'opening…';
+      await api('/api/project/open', { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ path: proj.file }) });
+      location.reload();
+    };
+  }
+}
+
 /* ---------- grammar points ---------- */
 async function showPoints() {
   const d = await api('/api/points');
@@ -936,7 +983,7 @@ async function showPoints() {
 /* ---------- batch review (triangle-style) ---------- */
 let RV = { pool: [], i: 0, point: '', done: [], counts: { ok: 0, no: 0, skip: 0 } };
 
-async function showReview() {
+async function showReview(prePoint) {
   const d = await api('/api/stats');
   const pts = await api('/api/points');
   $('#view').innerHTML = '';
@@ -964,6 +1011,7 @@ async function showReview() {
     '<label><input type="checkbox" id="rvbal" checked class="check"> length-balanced pool (fights the short-fragment monoculture)</label>' +
     '<button class="primary" id="rvgo" style="margin-top:12px">Build pool</button>' +
     '<span class="dim" id="rvpoolinfo" style="margin-left:10px"></span>';
+  if (prePoint) $('#rvpt').value = prePoint;
   $('#view').append(f);
   $('#rvgo').onclick = async () => {
     $('#rvpoolinfo').textContent = 'building…';
@@ -1013,14 +1061,15 @@ async function rvDecide(kind) {
   const r = RV.pool[RV.i];
   RV.done[RV.i] = kind === 'ok' ? 'ok' : kind === 'no' ? 'no' : '';
   RV.counts[kind] = (RV.counts[kind] || 0) + 1;
+  const ctx = RV.point ? 'point:' + RV.point : 'global';
   if (kind === 'ok') {
-    await api('/api/decide', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ ids: [r.id], decision: 'approved' }) });
+    await api('/api/pool-decide', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: 'approved' }) });
     await api('/api/deck/add', { method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ sentence_id: r.id, point: RV.point || '' }) });
   } else if (kind === 'no') {
-    await api('/api/decide', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ ids: [r.id], decision: 'discarded' }) });
+    await api('/api/pool-decide', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: 'discarded' }) });
   }
   RV.i += 1;
   rvShow();
@@ -1108,7 +1157,8 @@ async function deckMove(it, to, items) {
   showDeck();
 }
 
-const VIEWS = { stats: showStats, browse: showBrowse, points: showPoints,
+const VIEWS = { stats: showStats, browse: showBrowse, projects: showProjects,
+                points: showPoints,
                 review: showReview, deck: showDeck,
                 sources: showSources, lexicons: showLexicons, export: showExport };
 for (const a of document.querySelectorAll('#side a[data-view]')) {
