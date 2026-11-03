@@ -114,6 +114,7 @@ form.box input { width:100%; }
 .drow input.note { border:1px solid var(--line); border-radius:6px; background:var(--bg);
   color:var(--ink); font-size:12px; padding:4px 6px; width:220px; }
 .drow button { padding:3px 8px; font-size:12px; }
+.drow .mv { color:var(--accent); }
 
 /* projects + deck redactor */
 .projrow { display:flex; gap:10px; align-items:center; padding:12px;
@@ -129,6 +130,16 @@ form.box input { width:100%; }
 .block.empty { opacity:.6; border-style:dashed; }
 .block .cards { margin-top:10px; }
 
+#ptmodal { display:none; position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.35); }
+#ptmodal.open { display:flex; align-items:center; justify-content:center; }
+#ptmodal .inner { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  min-width:360px; max-width:520px; max-height:70vh; display:flex; flex-direction:column; padding:14px; }
+#ptmodal input { width:100%; margin-bottom:10px; }
+#ptmodal .list { overflow-y:auto; flex:1; }
+#ptmodal .list a { display:block; padding:6px 8px; border-radius:6px; cursor:pointer;
+  text-decoration:none; color:var(--ink); font-size:13.5px; }
+#ptmodal .list a:hover { background:var(--hov); }
+#ptmodal .list .pid { color:var(--muted); font-size:11px; margin-right:6px; }
 </style>
 </head>
 <body>
@@ -162,6 +173,12 @@ form.box input { width:100%; }
   </aside>
   <main id="view"></main>
 </div>
+<div id="ptmodal"><div class="inner">
+  <b>Move to grammar point</b>
+  <input id="ptm-search" placeholder="search points…" autocomplete="off">
+  <div class="list" id="ptm-list"></div>
+  <div class="row" style="margin-top:10px"><button id="ptm-cancel">Cancel</button></div>
+</div></div>
 <div id="preview">
   <div class="top">
     <button class="primary" id="pv-flip">Show back</button>
@@ -1174,6 +1191,26 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'x') { rvDecide('no'); }
   else if (k === 's' || e.key === 'ArrowLeft') { e.preventDefault(); rvDecide('skip'); }
   else if (k === 'z') { rvUndo(); }
+  else if (k === 'm') {
+    // move current card to a different point
+    if (RV.i < RV.pool.length) {
+      const r = RV.pool[RV.i];
+      ptOpen(async (newPoint) => {
+        await api('/api/pool-decide', { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ sentence_id: r.id,
+            context: 'point:' + newPoint, decision: 'approved' }) });
+        await api('/api/deck/add', { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ sentence_id: r.id, point: newPoint }) });
+        // advance past this card (it's now assigned elsewhere)
+        RV.done[RV.i] = 'ok';
+        RV.counts.ok = (RV.counts.ok || 0) + 1;
+        RV.i += 1;
+        rvShow();
+      }, RV.point);
+    }
+  }
 });
 
 /* ---------- deck workbench ---------- */
