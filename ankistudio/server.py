@@ -775,7 +775,7 @@ def create_app(db_path: str | Path) -> FastAPI:
             raise HTTPException(400, f"bad .aproj: {e}")
         store.reopen(dest_dir / "project.db")
         return {"opened": str(p), "name": manifest.get("name"),
-                "sources": len(manifest.get("sources", []))}
+                "sources": manifest.get("sources", 0)}
 
     # ---------- projects ----------
 
