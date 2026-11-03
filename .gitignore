@@ -4,3 +4,9 @@ __pycache__/
 data/
 reference/kchat/*.json
 .DS_Store
+*.egg-info/
+result/
+data/
+build/
+dist/
+*.apk
