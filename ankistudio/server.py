@@ -145,14 +145,26 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 def create_app(db_path: str | Path) -> FastAPI:
     app = FastAPI(title="AnkiStudio")
     store = Store(db_path)
+    # /api/stats backs every view; on 200k+ sentences its aggregate queries
+    # take real time, so short-lived caching keeps navigation snappy
+    stats_cache: dict = {"at": 0.0, "v": None}
+
+    def bust_stats():
+        stats_cache["v"] = None
 
     # ---------- api ----------
 
     @app.get("/api/stats")
     def stats():
-        return {"stats": store.stats(),
+        import time as _t
+        if stats_cache["v"] is None or _t.time() - stats_cache["at"] > 2.0:
+            stats_cache["v"] = {
+                "stats": store.stats(),
                 "sources": [dict(r) for r in store.sources()],
-                "lexicons": [dict(r) for r in store.lexicons()]}
+                "lexicons": [dict(r) for r in store.lexicons()],
+            }
+            stats_cache["at"] = _t.time()
+        return stats_cache["v"]
 
     @app.post("/api/import/apkg")
     def import_deck(req: ImportReq):
@@ -193,9 +205,9 @@ def create_app(db_path: str | Path) -> FastAPI:
     def sentences(q: str = "", source: int = 0, level: str = "",
                   status: str = "", sort: str = "len", page: int = 1,
                   per: int = 50):
-        """Card browser. Filters + sort + pagination. Level filtering runs in
-        Python (lexicon words are checked against sentence text)."""
-        import json as _json
+        """Card browser. Filtering, sorting, level selection and pagination
+        all run in SQL — the store can hold 200k+ sentences and must never
+        be materialized in Python."""
         where, args = ["1=1"], []
         if source:
             where.append("n.source_id=?"); args.append(source)
@@ -208,31 +220,25 @@ def create_app(db_path: str | Path) -> FastAPI:
             where.append("n.decision='discarded'")
         elif status == "pending":
             where.append("n.decision='' and n.keep=1")
+        if level:
+            where.append("n.level=?"); args.append(level)
+        order = {
+            "len": "(n.char_len is null), n.char_len, n.id",
+            "len_desc": "(n.char_len is null), n.char_len desc, n.id desc",
+            "source": "n.source_id, (n.char_len is null), n.char_len, n.id",
+            "recent": "n.id desc",
+        }.get(sort, "(n.char_len is null), n.char_len, n.id")
+        w = " and ".join(where)
+        total = store.db.execute(
+            f"select count(*) c from sentences n where {w}",
+            args).fetchone()["c"]
+        page, per = max(1, page), max(1, min(200, per))
         rows = [dict(r) for r in store.db.execute(
             f"select n.*, s.name source_name from sentences n"
-            f" join sources s on s.id=n.source_id where {' and '.join(where)}",
-            args)]
-        if req.q and req.match_mode == "regex":
-            import re as _re
-            try:
-                rx = _re.compile(req.q)
-            except _re.error:
-                raise HTTPException(400, f"bad regex: {req.q}")
-            rows = [r for r in rows if rx.search(r["text"] or "")]
-        if level:
-            # exact: level is precomputed by POST /api/classify
-            rows = [r for r in rows if r["level"] == level]
-        keyfns = {
-            "len": lambda r: (r["char_len"] or 0, r["id"]),
-            "len_desc": lambda r: (-(r["char_len"] or 0), r["id"]),
-            "source": lambda r: (r["source_id"], r["char_len"] or 0),
-            "recent": lambda r: -r["id"],
-        }
-        rows.sort(key=keyfns.get(sort, keyfns["len"]))
-        total = len(rows)
-        start = (page - 1) * per
-        return {"total": total, "page": page, "per": per,
-                "rows": rows[start:start + per]}
+            f" join sources s on s.id=n.source_id where {w}"
+            f" order by {order} limit ? offset ?",
+            args + [per, (page - 1) * per])]
+        return {"total": total, "page": page, "per": per, "rows": rows}
 
 
     @app.post("/api/import/video")
@@ -616,7 +622,10 @@ def create_app(db_path: str | Path) -> FastAPI:
     @app.post("/api/pool")
     def pool(req: PoolReq):
         """Diverse candidate pool for one point/query: per-source caps and
-        length spread fight the 'all short copula fragments' monoculture."""
+        length spread fight the 'all short copula fragments' monoculture.
+        Candidates are SAMPLED per source with bounded SQL (never a
+        full-table load) — stores run to 200k+ sentences."""
+        POOL_SAMPLE = 200          # per source; plenty for the diversity pass
         where = ["n.keep=1", "n.decision != 'discarded'"]
         args: list = []
         if req.source:
@@ -634,10 +643,23 @@ def create_app(db_path: str | Path) -> FastAPI:
             where.append("n.text not like ?"); args.append(f"%{req.exclude}%")
         where.append("n.char_len between ? and ?")
         args += [req.min_len, req.max_len]
-        rows = [dict(r) for r in store.db.execute(
-            f"select n.*, s.name source_name from sentences n"
-            f" join sources s on s.id=n.source_id where {' and '.join(where)}",
-            args)]
+        w = " and ".join(where)
+        total_matching = store.db.execute(
+            f"select count(*) c from sentences n where {w}",
+            args).fetchone()["c"]
+        # single-pass per-source sample: window row_number over the
+        # (source_id, id) index order — no per-source queries, no full
+        # materialization of a 200k-row table
+        rows = []
+        for r in store.db.execute(
+                f"select * from (select n.*, s.name source_name,"
+                f" row_number() over (partition by n.source_id order by n.id) __rn"
+                f" from sentences n join sources s on s.id=n.source_id"
+                f" where {w}) where __rn <= ? order by id",
+                args + [POOL_SAMPLE]):
+            d = dict(r)
+            d.pop("__rn", None)
+            rows.append(d)
         if req.q and req.match_mode == "regex":
             import re as _re
             try:
@@ -648,42 +670,12 @@ def create_app(db_path: str | Path) -> FastAPI:
         context = f"point:{req.point}" if req.point else "global"
         excluded = store.excluded_for(context)
         rows = [r for r in rows if r["id"] not in excluded]
-        if req.exclude_deck:
-            in_deck = {r["sentence_id"] for r in store.db.execute(
-                "select sentence_id from deck_items")}
-            rows = [r for r in rows if r["id"] not in in_deck]
-        # per-source cap with optional length spread: split each source's
-        # candidates into quantiles and take round-robin from them
-        by_src: dict[int, list] = {}
-        for r in rows:
-            by_src.setdefault(r["source_id"], []).append(r)
-        queues = []
-        for src_rows in by_src.values():
-            src_rows.sort(key=lambda r: r["char_len"] or 0)
-            if req.balanced and len(src_rows) > req.per_show:
-                n = req.per_show
-                picks = [src_rows[int(i * (len(src_rows) - 1) / max(1, n - 1))]
-                         for i in range(n)] if n > 1 else src_rows[:1]
-                queues.append(picks)
-            else:
-                queues.append(src_rows[:req.per_show])
-        out = []
-        while queues and len(out) < req.size:
-            nxt = []
-            for q in queues:
-                if q and len(out) < req.size:
-                    out.append(q.pop(0))
-                if q:
-                    nxt.append(q)
-            queues = nxt
-        # shuffle lightly so review isn't length-sorted per show
-        import random as _r
-        _r.Random(42).shuffle(out)
-        if not out and req.exclude_deck and rows:
-            # everything is already in the deck — show existing cards for
-            # curation instead of returning nothing
-            in_deck = {r["sentence_id"] for r in store.db.execute(
-                "select sentence_id from deck_items")}
+
+        def pick_queues(cands: list[dict]) -> list[list[dict]]:
+            by_src: dict[int, list] = {}
+            for r in cands:
+                by_src.setdefault(r["source_id"], []).append(r)
+            queues = []
             for src_rows in by_src.values():
                 src_rows.sort(key=lambda r: r["char_len"] or 0)
                 if req.balanced and len(src_rows) > req.per_show:
@@ -693,27 +685,9 @@ def create_app(db_path: str | Path) -> FastAPI:
                     queues.append(picks)
                 else:
                     queues.append(src_rows[:req.per_show])
-            # need to rebuild from all rows (not the deck-filtered ones)
-            all_rows = [dict(r) for r in store.db.execute(
-                f"select n.*, s.name source_name from sentences n"
-                f" join sources s on s.id=n.source_id where {' and '.join(where)}",
-                args)]
-            # apply pool_decisions filter only
-            excluded = store.excluded_for(context)
-            all_rows = [r for r in all_rows if r["id"] not in excluded]
-            by_src2 = {}
-            for r in all_rows:
-                by_src2.setdefault(r["source_id"], []).append(r)
-            queues = []
-            for src_rows in by_src2.values():
-                src_rows.sort(key=lambda r: r["char_len"] or 0)
-                if req.balanced and len(src_rows) > req.per_show:
-                    n = req.per_show
-                    picks = [src_rows[int(i * (len(src_rows) - 1) / max(1, n - 1))]
-                             for i in range(n)] if n > 1 else src_rows[:1]
-                    queues.append(picks)
-                else:
-                    queues.append(src_rows[:req.per_show])
+            return queues
+
+        def drain(queues: list[list[dict]]) -> list[dict]:
             out = []
             while queues and len(out) < req.size:
                 nxt = []
@@ -723,10 +697,24 @@ def create_app(db_path: str | Path) -> FastAPI:
                     if q:
                         nxt.append(q)
                 queues = nxt
-            _r.Random(42).shuffle(out)
-            return {"pool": out, "total_matching": len(all_rows),
+            return out
+
+        import random as _r
+        cands = rows
+        if req.exclude_deck:
+            in_deck = {r["sentence_id"] for r in store.db.execute(
+                "select sentence_id from deck_items")}
+            fresh = [r for r in rows if r["id"] not in in_deck]
+            if fresh or not rows:
+                cands = fresh
+        out = drain(pick_queues(cands))
+        _r.Random(42).shuffle(out)
+        if not out and rows:
+            # everything sampled is already in the deck — show those cards
+            # for curation instead of returning nothing
+            return {"pool": rows[:req.size], "total_matching": total_matching,
                     "point": req.point, "note": "showing cards already in deck"}
-        return {"pool": out, "total_matching": len(rows), "point": req.point}
+        return {"pool": out, "total_matching": total_matching, "point": req.point}
 
     @app.get("/api/deck")
     def deck_list():
@@ -797,6 +785,7 @@ def create_app(db_path: str | Path) -> FastAPI:
         except (_z.BadZipFile, ValueError) as e:
             raise HTTPException(400, f"bad .aproj: {e}")
         store.reopen(dest_dir / "project.db")
+        bust_stats()
         return {"opened": str(p), "name": manifest.get("name"),
                 "sources": manifest.get("sources", 0)}
 

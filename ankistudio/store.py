@@ -44,6 +44,9 @@ create table if not exists sentences(
 create index if not exists sent_src on sentences(source_id);
 create index if not exists sent_keep on sentences(keep);
 create index if not exists sent_dec on sentences(decision);
+create index if not exists sent_level on sentences(level);
+create index if not exists sent_len on sentences(char_len);
+create index if not exists sent_text on sentences(text);
 create table if not exists lexicons(
   id integer primary key,
   name text not null,
