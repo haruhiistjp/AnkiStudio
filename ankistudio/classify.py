@@ -66,10 +66,6 @@ def sentence_level(text: str, word_level: dict[str, int], n_levels: int,
 
 def classify_store(store: Store, lexicon_id: int) -> dict:
     """Recompute sentences.level for every kept sentence."""
-    store.db.execute(
-        "alter table sentences add column level text default ''") \
-        if "level" not in {r[1] for r in store.db.execute("pragma table_info(sentences)")} \
-        else None
     lex = store.db.execute("select * from lexicons where id=?",
                            (lexicon_id,)).fetchone()
     if not lex:

@@ -38,7 +38,8 @@ create table if not exists sentences(
   drop_code text,
   decision text default '',       -- '' | approved | discarded
   decided_at real,
-  known text                      -- json {lexicon_id: unknown_count}
+  known text,                     -- json {lexicon_id: unknown_count}
+  level text default ""
 );
 create index if not exists sent_src on sentences(source_id);
 create index if not exists sent_keep on sentences(keep);
@@ -76,6 +77,13 @@ create table if not exists deck_items(
   note text                      -- per-card explanation shown on export
 );
 create index if not exists deck_point on deck_items(point, position);
+create table if not exists pool_decisions(
+  sentence_id integer not null,
+  context text not null default 'global',
+  decision text,
+  decided_at real,
+  primary key (sentence_id, context)
+);
 """
 
 
@@ -169,6 +177,39 @@ class Store:
     def deck_remove(self, item_id: int):
         self.db.execute("delete from deck_items where id=?", (item_id,))
         self.db.commit()
+
+    # -- pool decisions (multidimensional: reject for GP-1 ≠ reject forever) --
+
+    def pool_decide(self, sentence_id: int, context: str, decision: str):
+        """context = 'global' or 'point:GP-XXX'. Rejection for one point
+        doesn't block the sentence from appearing in other points' pools."""
+        with self._lock:
+            self.db.execute(
+                "insert or replace into pool_decisions"
+                " (sentence_id, context, decision, decided_at) values (?,?,?,?)",
+                (sentence_id, context, decision, time.time()))
+            # mirror global approval to the legacy sentences.decision column
+            if context == "global":
+                self.db.execute(
+                    "update sentences set decision=?, decided_at=? where id=?",
+                    (decision, time.time(), sentence_id))
+            elif decision == "approved":
+                self.db.execute(
+                    "update sentences set decision='approved', decided_at=?"
+                    " where id=? and decision=''",
+                    (time.time(), sentence_id))
+            self.db.commit()
+
+    def excluded_for(self, context: str) -> set[int]:
+        """Sentence ids to exclude from a pool for this context: globally
+        discarded + discarded for this specific point."""
+        ids = set()
+        for r in self.db.execute(
+                "select sentence_id from pool_decisions"
+                " where context in ('global', ?) and decision = 'discarded'",
+                (context,)):
+            ids.add(r["sentence_id"])
+        return ids
 
     # -- settings ---------------------------------------------------------
 
