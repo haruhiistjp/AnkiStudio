@@ -188,32 +188,96 @@ def import_freq_apkg(store: Store, path: str | Path, name: str | None = None,
 
 
 def import_video(store, video_path: str | Path, subs_path: str | Path,
-                 offset: float = 0.0, pad: float = 0.35,
-                 name: str | None = None) -> dict:
-    """Index a video + subtitles pair. Cue times are stored ORIGINAL;
-    the global offset and any later shift segments live in sources.meta
-    and are applied at media-cut time (no re-import needed)."""
+                 offset: float = 0.0, pad_start: float = 0.35,
+                 pad_end: float = 0.35, name: str | None = None,
+                 sub_lang: str = "auto", astream: int | None = None) -> dict:
+    """Index a video + subtitles pair WITHOUT keeping the big video file:
+    one audio track is stream-copied to a small .mka and a frame image is
+    grabbed per kept cue; the video itself is deleted afterwards (it was
+    only a temp upload). Cue times are stored ORIGINAL; the global offset
+    and any later shift segments live in sources.meta and are applied at
+    media-cut time (no re-import needed). Bilingual subtitle files are
+    filtered to one language (sub_lang: auto = Japanese when detected)."""
+    import subprocess as _sp
+    from . import ffmpeg as ff
     from . import subs as subs_mod
     video_path, subs_path = Path(video_path), Path(subs_path)
-    cues = subs_mod.parse(subs_path)
+
+    cues = subs_mod.parse_detail(subs_path)
+    info = subs_mod.analyze_cues(cues)
+    lang_applied = ""
+    if sub_lang in ("ja", "zh"):
+        lang_applied = sub_lang
+    elif sub_lang == "auto" and info["bilingual"]:
+        lang_applied = "ja"
+    if lang_applied:
+        cues = subs_mod.pick_language(cues, lang_applied)
     if not cues:
-        raise ValueError("no cues parsed from the subtitle file")
+        raise ValueError("no cues parsed from the subtitle file"
+                         + (f" after keeping '{lang_applied}'" if lang_applied else ""))
+
+    probe = ff.probe_audio(video_path)
+    streams = probe["streams"]
+    if astream is None or not 0 <= astream < len(streams):
+        astream = probe["default"]
+    updir = store.path.parent / "uploads"
+    audio_path = ff.extract_audio(video_path, astream, updir,
+                                  name or video_path.stem)
+
     src_id = store.add_source(
-        "video", name or video_path.stem, str(video_path),
-        {"video": str(video_path), "subs": str(subs_path), "subs_name":
-         subs_path.name, "offset": offset, "pad": pad, "segments": []})
+        "video", name or video_path.stem, str(audio_path),
+        {"audio": str(audio_path), "astream": astream,
+         "astream_label": ff.stream_label(streams[astream]),
+         "video_name": video_path.name, "subs": str(subs_path),
+         "subs_name": subs_path.name, "sub_lang": lang_applied,
+         "offset": offset, "pad_start": pad_start, "pad_end": pad_end,
+         "segments": []})
     rows = []
-    for i, (start, end, text) in enumerate(cues, 1):
+    for i, c in enumerate(cues, 1):
+        text = c["text"]
         code, flags = classify_quality(text, MAX_CHARS)
         rows.append({
             "source_id": src_id, "ref": str(i),
             "text": text, "reading": "", "translation": "",
-            "episode": "", "start": f"{start:.3f}", "end": f"{end:.3f}",
+            "episode": "", "start": f"{c['start']:.3f}", "end": f"{c['end']:.3f}",
             "media_audio": "cut", "media_image": "frame",
             "char_len": len(re.sub(r"\W", "", text, flags=re.UNICODE)),
             "flags": flags, "keep": 0 if code else 1,
             "drop_code": code or "", "known": "{}",
         })
     store.add_sentences(src_id, rows)
+
+    # frames for kept cues while the temp video still exists
+    meta0 = {"offset": offset, "segments": []}
+    frames = 0
+    for r in rows:
+        if not r["keep"]:
+            continue
+        t = float(r["start"]) + (float(r["end"]) - float(r["start"])) * 0.4
+        try:
+            ff.grab_frame_to(video_path, t, ff.frame_cache_path(src_id, r["ref"]),
+                             meta=meta0)
+            frames += 1
+        except _sp.CalledProcessError:
+            pass
+
+    # the temp video is never kept; also sweep stale temp uploads.
+    # resolve() both sides: uploads are stored with resolved paths while
+    # the db path may be relative or behind a symlink (/tmp -> /private/tmp)
+    tmp_dir = (store.path.parent / "tmp").resolve()
+    if tmp_dir in video_path.resolve().parents:
+        video_path.unlink(missing_ok=True)
+    import time as _time
+    cutoff = _time.time() - 24 * 3600
+    for old in (tmp_dir.glob("*") if tmp_dir.is_dir() else []):
+        try:
+            if old.is_file() and old.stat().st_mtime < cutoff:
+                old.unlink()
+        except OSError:
+            pass
+
     return {"source_id": src_id, "cues": len(rows),
-            "kept": sum(1 for r in rows if r["keep"])}
+            "kept": sum(1 for r in rows if r["keep"]), "frames": frames,
+            "audio_track": ff.stream_label(streams[astream]),
+            "sub_lang": lang_applied,
+            "bilingual": info["bilingual"]}

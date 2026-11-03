@@ -69,7 +69,8 @@ def _ext(name: str, default: str) -> str:
 def build_deck(store, name: str, preset: str = "immersion",
                status: str = "approved", source_id: int = 0,
                level: str = "", out_dir: str | Path = "result",
-               pad: float | None = None) -> dict:
+               pad_start: float | None = None,
+               pad_end: float | None = None) -> dict:
     where, args = ["n.keep=1"], []
     if status == "approved":
         where.append("n.decision='approved'")
@@ -102,16 +103,26 @@ def build_deck(store, name: str, preset: str = "immersion",
             meta = _json.loads(r["source_meta"] or "{}")
             try:
                 start, end = float(r["start"]), float(r["end"])
-                row_pad = pad if pad is not None else meta.get("pad", 0.35)
-                fp = _ff.cut_audio(Path(r["source_path"]), start, end, "mp3",
-                                   meta=meta, pad=row_pad)
+                lead = pad_start if pad_start is not None \
+                    else meta.get("pad_start", meta.get("pad", 0.35))
+                tail = pad_end if pad_end is not None \
+                    else meta.get("pad_end", meta.get("pad", 0.35))
+                # current sources keep only the extracted audio track;
+                # older ones still point at a full video file
+                media_path = Path(meta.get("audio") or r["source_path"])
+                fp = _ff.cut_audio(media_path, start, end, "mp3",
+                                   meta=meta, pad_start=lead, pad_end=tail)
                 media.append(str(fp))
                 audio_html = f"[sound:{fp.name}]"
                 n_media += 1
-                fp = _ff.grab_frame(Path(r["source_path"]), start + (end - start) * 0.4, meta=meta)
-                media.append(str(fp))
-                img_html = f'<img src="{fp.name}">'
-                n_media += 1
+                imgp = _ff.cached_frame(r["source_id"], r["ref"])
+                if imgp is None and Path(r["source_path"]).exists():
+                    imgp = _ff.grab_frame(Path(r["source_path"]),
+                                          start + (end - start) * 0.4, meta=meta)
+                if imgp is not None:
+                    media.append(str(imgp))
+                    img_html = f'<img src="{imgp.name}">'
+                    n_media += 1
             except Exception:
                 pass
             src = f"{r['source_name']}{(' · ep ' + r['episode']) if r['episode'] else ''}"
