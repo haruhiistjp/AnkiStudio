@@ -773,6 +773,32 @@ async function showExport() {
         `<a href="/api/export/file?name=${encodeURIComponent(r.path)}" download>${esc(r.path.split('/').pop())}</a>`;
     } catch (e) { $('#xres').textContent = 'error: ' + e.message; }
   };
+
+  // three save/export actions
+  const actions = es('div'); actions.style.marginTop = '22px';
+  actions.innerHTML =
+    '<h2 style="font-size:15px">Save & export</h2>' +
+    '<div class="row">' +
+    '<button class="primary" id="x-apkg">Export deck (.apkg)</button>' +
+    '<button id="x-aproj-export">Export project (.aproj)</button>' +
+    '<button id="x-aproj-save">Save project</button></div>' +
+    '<p class="hint" style="margin-top:6px">' +
+    'deck for Anki / project copy / save to projects list</p>' +
+    '<div class="dim" id="x-action-msg" style="margin-top:6px"></div>';
+  $('#view').append(actions);
+  $('#x-apkg').onclick = () => $('#xgo').click();
+  $('#x-aproj-export').onclick = async () => {
+    const name = $('#xname').value || 'ankistudio';
+    const r = await api('/api/project/save?name=' + encodeURIComponent(name) +
+      '&path=' + encodeURIComponent($('#xdir').value));
+    $('#x-action-msg').textContent = 'project exported: ' + r.path;
+  };
+  $('#x-aproj-save').onclick = async () => {
+    const name = $('#xname').value || 'ankistudio';
+    const r = await api('/api/project/save?name=' + encodeURIComponent(name) +
+      '&path=data/projects');
+    $('#x-action-msg').textContent = 'project saved: ' + r.path;
+  };
 }
 
 /* ---------- native file pickers + upload ---------- */
@@ -1009,6 +1035,7 @@ async function showReview(prePoint) {
     'pool <input id="rvsize" type="number" value="40" style="width:64px">' +
     'per show <input id="rvpshow" type="number" value="3" style="width:64px"></div>' +
     '<label><input type="checkbox" id="rvbal" checked class="check"> length-balanced pool (fights the short-fragment monoculture)</label>' +
+    '<label><input type="checkbox" id="rvexcl" checked class="check"> exclude cards already in deck</label>' +
     '<button class="primary" id="rvgo" style="margin-top:12px">Build pool</button>' +
     '<span class="dim" id="rvpoolinfo" style="margin-left:10px"></span>';
   if (prePoint) $('#rvpt').value = prePoint;
@@ -1022,7 +1049,8 @@ async function showReview(prePoint) {
         source: +$('#rvsrc').value, level: $('#rvlev').value,
         min_len: +$('#rvmin').value, max_len: +$('#rvmax').value,
         size: +$('#rvsize').value, per_show: +$('#rvpshow').value,
-        balanced: $('#rvbal').checked }) });
+        balanced: $('#rvbal').checked,
+        exclude_deck: $('#rvexcl').checked }) });
     RV = { pool: r.pool, i: 0, point: target, done: [],
            counts: { ok: 0, no: 0, skip: 0 } };
     $('#rvpoolinfo').textContent = `${r.total_matching} matching → pool of ${r.pool.length}`;
