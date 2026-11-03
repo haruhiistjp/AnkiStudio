@@ -656,6 +656,53 @@ def create_app(db_path: str | Path) -> FastAPI:
         # shuffle lightly so review isn't length-sorted per show
         import random as _r
         _r.Random(42).shuffle(out)
+        if not out and req.exclude_deck and rows:
+            # everything is already in the deck — show existing cards for
+            # curation instead of returning nothing
+            in_deck = {r["sentence_id"] for r in store.db.execute(
+                "select sentence_id from deck_items")}
+            for src_rows in by_src.values():
+                src_rows.sort(key=lambda r: r["char_len"] or 0)
+                if req.balanced and len(src_rows) > req.per_show:
+                    n = req.per_show
+                    picks = [src_rows[int(i * (len(src_rows) - 1) / max(1, n - 1))]
+                             for i in range(n)] if n > 1 else src_rows[:1]
+                    queues.append(picks)
+                else:
+                    queues.append(src_rows[:req.per_show])
+            # need to rebuild from all rows (not the deck-filtered ones)
+            all_rows = [dict(r) for r in store.db.execute(
+                f"select n.*, s.name source_name from sentences n"
+                f" join sources s on s.id=n.source_id where {' and '.join(where)}",
+                args)]
+            # apply pool_decisions filter only
+            excluded = store.excluded_for(context)
+            all_rows = [r for r in all_rows if r["id"] not in excluded]
+            by_src2 = {}
+            for r in all_rows:
+                by_src2.setdefault(r["source_id"], []).append(r)
+            queues = []
+            for src_rows in by_src2.values():
+                src_rows.sort(key=lambda r: r["char_len"] or 0)
+                if req.balanced and len(src_rows) > req.per_show:
+                    n = req.per_show
+                    picks = [src_rows[int(i * (len(src_rows) - 1) / max(1, n - 1))]
+                             for i in range(n)] if n > 1 else src_rows[:1]
+                    queues.append(picks)
+                else:
+                    queues.append(src_rows[:req.per_show])
+            out = []
+            while queues and len(out) < req.size:
+                nxt = []
+                for q in queues:
+                    if q and len(out) < req.size:
+                        out.append(q.pop(0))
+                    if q:
+                        nxt.append(q)
+                queues = nxt
+            _r.Random(42).shuffle(out)
+            return {"pool": out, "total_matching": len(all_rows),
+                    "point": req.point, "note": "showing cards already in deck"}
         return {"pool": out, "total_matching": len(rows), "point": req.point}
 
     @app.get("/api/deck")
