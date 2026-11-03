@@ -31,6 +31,10 @@ def main() -> int:
                        choices=["auto", "ja", "zh", "all"],
                        help="bilingual subs: keep one language (default: auto)")
 
+    p_cnv = sub.add_parser("convert-curedolly", help="convert the CureDolly repo into an .aproj")
+    p_cnv.add_argument("cd_home")
+    p_cnv.add_argument("--out", default="data/projects/CureDolly.aproj")
+
     p_frq = sub.add_parser("freq", help="import a frequency list (tsv or apkg)")
     p_frq.add_argument("path")
     p_frq.add_argument("--format", choices=["tsv", "apkg"], default=None,
@@ -68,6 +72,13 @@ def main() -> int:
                          sub_lang="" if args.sub_lang == "all" else args.sub_lang)
         print(f"{args.video}: {r['cues']} cues, {r['kept']} kept")
         store.close()
+        return 0
+
+    if args.cmd == "convert-curedolly":
+        from .cd_import import convert_curedolly
+        r = convert_curedolly(args.cd_home, args.out)
+        for k, v in r.items():
+            print(f"  {k}: {v}")
         return 0
 
     if args.cmd == "freq":
