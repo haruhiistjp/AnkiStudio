@@ -27,6 +27,10 @@ The pipeline: **import → index → classify → pool → review → deck → e
 - **Export** — build .apkg decks for Anki with stable GUIDs, media
   packaging, and per-card notes.
 
+## New here?
+
+Read **[QUICKSTART.md](QUICKSTART.md)** — a 5-minute guide for non-technical users.
+
 ## Documentation
 
 - [docs/APROJ.md](docs/APROJ.md) — the .aproj project file format
