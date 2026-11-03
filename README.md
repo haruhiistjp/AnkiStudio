@@ -51,26 +51,33 @@ Nothing phones home; API keys are only used by features you run.
 
 ## Quick start
 
+**Never used a terminal before?** Read **[QUICKSTART.md](QUICKSTART.md)** first — it walks you through every step.
+
 ```bash
-cd /Volumes/Ayaneru/AnkiStudio
+# 1. Download the app
+git clone https://github.com/haruhiistjp/AnkiStudio.git
+cd AnkiStudio
+
+# 2. Install (one-time, ~1 minute)
 uv venv && uv pip install -e ".[jp]"
 
-# convert the CureDolly project into an .aproj (~220k sentences)
-ankistudio convert-curedolly /Volumes/Ayaneru/AnkiDecks/CureDolly
-
-# start the app
+# 3. Start the app
 ankistudio serve                    # → http://127.0.0.1:8796
 ```
 
-Or use individual commands:
+Then open **http://127.0.0.1:8796** in your browser.
 
-```bash
-ankistudio import deck.apkg         # index an Anki deck
-ankistudio import-video ep.mp4 ep.ja.srt  # video + subtitles
-ankistudio freq list.tsv            # frequency list → lexicon
-ankistudio classify                 # compute sentence levels
-ankistudio stats                    # JSON statistics
-```
+**To open an existing project** (like `CureDolly.aproj` from the [releases page](https://github.com/haruhiistjp/AnkiStudio/releases)):
+1. Download the `.aproj` file
+2. Put it in the `data/projects/` folder inside the AnkiStudio directory
+3. Click **Projects** → **Open** in the app
+
+**To create your own project from scratch:**
+1. Click **Sources** → import an Anki deck (`.apkg`) or a video with subtitles
+2. Click **Lexicons** → import a frequency list for vocabulary levels
+3. Click **Grammar points** → import or create your grammar taxonomy
+4. Click **Batch review** → pick a point, build a pool, review with keyboard
+5. Click **Export** → build an `.apkg` for Anki
 
 ## Layout
 
@@ -98,12 +105,13 @@ reference/           rescued implementations (K-chat alignment, Serbian
 
 ## The CureDolly project
 
-The converter reads the CureDolly repo (read-only!) and produces a
-self-contained .aproj with:
-- **271 grammar points** (the full taxonomy from lessons 1–97)
-- **220,089 sentences** — every kept clip from all 47 source decks,
-  plus two Tongari Boushi video episodes
-- **2,147 approved examples** already linked to their grammar points
-- **47 sources** (Anki decks + video) with media references
+A ready-made Japanese grammar project is available as a [release download](https://github.com/haruhiistjp/AnkiStudio/releases). It contains:
+- **271 grammar points** (lessons 1–97, beginner to advanced)
+- **220,089 sentences** from 47 anime shows + 2 video episodes
+- **2,147 pre-approved examples** already placed in the deck
+- ~19 MB (text only; audio requires the source Anki decks on your machine)
 
-The .aproj is ~19 MB (text only; media stays in the source files).
+If you have the [CureDolly source repository](https://github.com/haruhiistjp/CureDolly) locally, you can also regenerate the project file yourself:
+```bash
+ankistudio convert-curedolly /path/to/CureDolly
+```
