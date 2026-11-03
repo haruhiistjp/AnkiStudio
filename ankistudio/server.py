@@ -5,9 +5,27 @@ import re
 import subprocess as _sp
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+
+def _ensure_readable(p: Path, what: str):
+    """exists() alone is not enough on macOS: privacy protection (TCC)
+    denies open() for e.g. ~/Downloads or external volumes while stat
+    still succeeds. Turn that into a clear message instead of a 500."""
+    try:
+        with p.open("rb"):
+            pass
+    except PermissionError:
+        raise HTTPException(403, (
+            f"macOS privacy protection blocks reading {what}: {p} — "
+            "pick the file through the system dialog in the web UI "
+            "(the browser uploads it), or grant the app running the server "
+            "access in System Settings → Privacy & Security → "
+            "Files and Folders / Full Disk Access."))
+    except OSError as e:
+        raise HTTPException(400, f"cannot read {what} {p}: {e}")
 
 
 class ImportReq(BaseModel):
@@ -40,14 +58,30 @@ class VideoReq(BaseModel):
     video: str
     subs: str
     offset: float = 0.0
-    pad: float = 0.35
+    pad_start: float = 0.35        # lead padding seconds
+    pad_end: float = 0.35          # tail padding seconds
     name: str | None = None
+    astream: int | None = None     # audio stream ordinal; None = auto (Japanese)
+    sub_lang: str = "auto"         # auto | ja | zh | '' (keep all lines)
+
+
+class AnalyzeReq(BaseModel):
+    path: str
+
+
+class PreWhisperReq(BaseModel):
+    video: str                      # temp upload path
+    subs: str                       # stored subs path
+    astream: int | None = None      # None = auto (Japanese)
+    sub_lang: str = "auto"
 
 
 class ShiftReq(BaseModel):
     offset: float = 0.0
     segments: list[dict] = []      # [{at: seconds, shift: seconds}] absolute
-    pad: float | None = None       # audio padding seconds for this source
+    pad_start: float | None = None  # lead padding seconds (before the line)
+    pad_end: float | None = None    # tail padding seconds (after the line)
+    name: str | None = None         # rename the source
 
 
 class ExportReq(BaseModel):
@@ -57,7 +91,8 @@ class ExportReq(BaseModel):
     source: int = 0
     level: str = ""
     out_dir: str = "result"
-    pad: float | None = None        # audio padding; None = source default
+    pad_start: float | None = None  # override lead padding; None = source's own
+    pad_end: float | None = None    # override tail padding; None = source's own
 
 from .importer import import_apkg, import_freq_apkg, import_freq_tsv
 from .store import Store
@@ -82,6 +117,7 @@ def create_app(db_path: str | Path) -> FastAPI:
         p = Path(req.path).expanduser()
         if not p.exists():
             raise HTTPException(404, f"no such file: {p}")
+        _ensure_readable(p, "deck file")
         return import_apkg(store, p, max_chars=req.max_chars)
 
     @app.post("/api/import/freq-tsv")
@@ -89,6 +125,7 @@ def create_app(db_path: str | Path) -> FastAPI:
         p = Path(req.path).expanduser()
         if not p.exists():
             raise HTTPException(404, f"no such file: {p}")
+        _ensure_readable(p, "frequency list")
         lid = import_freq_tsv(store, p, word_col=req.word_col,
                               level_col=req.level_col)
         return {"lexicon_id": lid}
@@ -98,6 +135,7 @@ def create_app(db_path: str | Path) -> FastAPI:
         p = Path(req.path).expanduser()
         if not p.exists():
             raise HTTPException(404, f"no such file: {p}")
+        _ensure_readable(p, "frequency deck")
         lid = import_freq_apkg(store, p, word_field=req.word_field,
                                level_field=req.level_field)
         return {"lexicon_id": lid}
@@ -156,10 +194,86 @@ def create_app(db_path: str | Path) -> FastAPI:
             raise HTTPException(404, f"no video: {v}")
         if not b.exists():
             raise HTTPException(404, f"no subtitles: {b}")
+        _ensure_readable(v, "video file")
+        _ensure_readable(b, "subtitle file")
+        if req.sub_lang not in ("auto", "ja", "zh", ""):
+            raise HTTPException(400, "sub_lang must be auto|ja|zh|''")
         try:
-            return _iv(store, v, b, offset=req.offset, pad=req.pad, name=req.name)
+            return _iv(store, v, b, offset=req.offset, name=req.name,
+                       pad_start=req.pad_start, pad_end=req.pad_end,
+                       astream=req.astream, sub_lang=req.sub_lang)
         except ValueError as e:
             raise HTTPException(400, str(e))
+        except _sp.CalledProcessError:
+            raise HTTPException(400, "ffmpeg failed on this file "
+                                     "(is ffmpeg installed and the file valid?)")
+
+    @app.post("/api/analyze-subs")
+    def analyze_subs(req: AnalyzeReq):
+        """Language stats for an uploaded subtitle file, so the UI can
+        offer to keep just one language of a bilingual track."""
+        from . import subs as _subs
+        p = Path(req.path).expanduser()
+        if not p.exists():
+            raise HTTPException(404, f"no such file: {p}")
+        _ensure_readable(p, "subtitle file")
+        try:
+            cues = _subs.parse_detail(p)
+        except Exception as e:
+            raise HTTPException(400, f"cannot parse subtitles: {e}")
+        return _subs.analyze_cues(cues)
+
+    @app.post("/api/probe-video")
+    def probe_video(req: AnalyzeReq):
+        """Audio stream list for an uploaded (temp) video, with the
+        suggested Japanese default for the import dialog."""
+        from . import ffmpeg as _ff
+        p = Path(req.path).expanduser()
+        if not p.exists():
+            raise HTTPException(404, f"no such file: {p}")
+        _ensure_readable(p, "video file")
+        try:
+            return _ff.probe_audio(p)
+        except (_sp.CalledProcessError, FileNotFoundError):
+            raise HTTPException(400, "ffprobe failed — is ffmpeg installed?")
+
+    @app.post("/api/upload")
+    async def upload(file: UploadFile = File(...), temp: bool = False):
+        """Store a file picked with the system dialog and return its path.
+        The browser reads the file after the user consents in the native
+        open panel, so the server never has to touch macOS-protected
+        locations (~/Downloads, external volumes).
+
+        temp=1 parks a big video under data/tmp — the import extracts its
+        audio track and frame images and deletes it, so the gigabytes never
+        become permanent. Regular files (subtitles, decks) land in
+        data/uploads; re-uploads of an identical file (same stored name
+        and size) reuse the existing copy instead of re-saving it."""
+        import uuid as _uuid
+        updir = store.path.parent / ("tmp" if temp else "uploads")
+        updir.mkdir(parents=True, exist_ok=True)
+        orig = file.filename or "upload"
+        safe = re.sub(r"[^\w.\-]+", "_", orig).strip("._") or "upload"
+        size = file.size                    # from Content-Length
+        if size is not None and not temp:
+            for cand in updir.glob(f"*-{safe}"):
+                try:
+                    if cand.is_file() and cand.stat().st_size == size:
+                        while await file.read(1 << 20):
+                            pass            # drain the request body
+                        return {"path": str(cand.resolve()), "name": orig,
+                                "size": size, "reused": True}
+                except OSError:
+                    continue
+        dest = updir / f"{_uuid.uuid4().hex[:8]}-{safe}"
+        with dest.open("wb") as out:
+            while chunk := await file.read(1 << 20):
+                out.write(chunk)
+        if not dest.stat().st_size:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, "empty upload")
+        return {"path": str(dest.resolve()), "name": orig,
+                "size": dest.stat().st_size, "reused": False}
 
     @app.get("/api/video/{sid}")
     def video_meta(sid: int):
@@ -172,18 +286,162 @@ def create_app(db_path: str | Path) -> FastAPI:
     @app.post("/api/video/{sid}/shift")
     def video_shift(sid: int, req: ShiftReq):
         import json as _j
-        r = store.db.execute("select meta from sources where id=?", (sid,)).fetchone()
+        r = store.db.execute("select * from sources where id=?", (sid,)).fetchone()
         if not r:
             raise HTTPException(404, "no such source")
         meta = _j.loads(r["meta"] or "{}")
         meta["offset"] = req.offset
         meta["segments"] = sorted(req.segments, key=lambda g: g.get("at", 0))
-        if req.pad is not None:
-            meta["pad"] = max(0.0, min(5.0, req.pad))
+        meta.pop("pad", None)          # legacy single-sided value
+        if req.pad_start is not None:
+            meta["pad_start"] = max(0.0, min(5.0, req.pad_start))
+        if req.pad_end is not None:
+            meta["pad_end"] = max(0.0, min(5.0, req.pad_end))
         store.db.execute("update sources set meta=? where id=?",
                          (_j.dumps(meta), sid))
+        name = r["name"]
+        if req.name is not None and req.name.strip():
+            name = req.name.strip()[:120]
+            store.db.execute("update sources set name=? where id=?",
+                             (name, sid))
         store.db.commit()
-        return meta
+        return {"name": name, **meta}
+
+    @app.post("/api/video/{sid}/whisper")
+    def video_whisper(sid: int):
+        """Measure the global subtitle shift with Whisper. Streams one
+        JSON line per measured cue (live progress), then a final line
+        with the median. Read-only — the UI applies the suggested offset
+        only on user confirmation."""
+        from fastapi.responses import StreamingResponse
+        from . import whisper as _wh
+
+        def ndjson(gen):
+            import json as _json
+            for ev in gen:
+                yield _json.dumps(ev, ensure_ascii=False) + "\n"
+
+        r = store.db.execute("select id, kind from sources where id=?",
+                             (sid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "no such source")
+        try:
+            prep = _wh.analyze_shift(store, sid)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return StreamingResponse(ndjson(_wh.run_measure(prep)),
+                                 media_type="application/x-ndjson")
+
+    @app.post("/api/whisper/pre")
+    def whisper_pre(req: PreWhisperReq):
+        """Measure the global shift BEFORE import, on the temp video and
+        the stored subtitles — so the offset lands in the import form and
+        the frame images grabbed at import are timed correctly. Streams
+        progress lines like /api/video/{sid}/whisper."""
+        from fastapi.responses import StreamingResponse
+        from . import whisper as _wh
+
+        def ndjson(gen):
+            import json as _json
+            for ev in gen:
+                yield _json.dumps(ev, ensure_ascii=False) + "\n"
+
+        v, b = Path(req.video).expanduser(), Path(req.subs).expanduser()
+        if not v.exists():
+            raise HTTPException(404, f"no video: {v}")
+        if not b.exists():
+            raise HTTPException(404, f"no subtitles: {b}")
+        _ensure_readable(v, "video file")
+        _ensure_readable(b, "subtitle file")
+        if req.sub_lang not in ("auto", "ja", "zh", ""):
+            raise HTTPException(400, "sub_lang must be auto|ja|zh|''")
+        try:
+            prep = _wh.analyze_pre(v, b, req.astream, req.sub_lang,
+                                   store.path.parent.parent)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return StreamingResponse(ndjson(_wh.run_measure(prep)),
+                                 media_type="application/x-ndjson")
+
+    @app.post("/api/whisper/install")
+    def whisper_install():
+        """Auto-install whisper into a dedicated project venv (.venv-whisper,
+        CPython 3.11 via uv) when no system whisper is on PATH. Slow the
+        first time — downloads Python + torch + whisper."""
+        from . import whisper as _wh
+        try:
+            return _wh.ensure_installed(store.path.parent.parent)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/video/{sid}/subs")
+    def video_subs(sid: int):
+        """The source's original subtitle file with corrected timings —
+        the source's offset and shift segments applied, everything else
+        (styles, languages, layout) untouched. Served as a download."""
+        import json as _j
+        from urllib.parse import quote as _quote
+        from fastapi.responses import Response
+        from . import subs as _subs
+        from . import ffmpeg as _ff
+        r = store.db.execute("select * from sources where id=?",
+                             (sid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "no such source")
+        meta = _j.loads(r["meta"] or "{}")
+        subs_path = Path(meta.get("subs") or "")
+        if not subs_path or not subs_path.exists():
+            raise HTTPException(404, "original subtitle file not stored "
+                                     "for this source")
+        _ensure_readable(subs_path, "subtitle file")
+        text, _ = _subs.retime(
+            subs_path, lambda t: _ff.effective_time(t, meta) - t)
+        safe = re.sub(r"[^\w.\-]+", "_", r["name"] or "subs").strip("._") or "subs"
+        fname = f"{safe}.fixed{subs_path.suffix or '.srt'}"
+        return Response(content=text, media_type="text/plain; charset=utf-8",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename*=UTF-8''{_quote(fname)}"})
+
+    @app.delete("/api/source/{sid}")
+    def delete_source(sid: int):
+        """Drop a source with its sentences; media files it owned under
+        data/uploads (extracted audio, uploaded decks) are removed too,
+        unless another source still references them."""
+        import json as _j
+        r = store.db.execute("select * from sources where id=?", (sid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "no such source")
+        store.db.execute("delete from sentences where source_id=?", (sid,))
+        store.db.execute("delete from sources where id=?", (sid,))
+        store.db.commit()
+        meta = _j.loads(r["meta"] or "{}")
+        owned = {r["path"] or "", meta.get("audio") or ""}
+        others = store.db.execute(
+            "select path, meta from sources where id<>?", (sid,)).fetchall()
+        for o in others:
+            owned -= {o["path"] or ""}
+            try:
+                owned -= {_j.loads(o["meta"] or "{}").get("audio") or ""}
+            except ValueError:
+                pass
+        updir = (store.path.parent / "uploads").resolve()
+        removed = []
+        for p in list(owned):
+            if not p:
+                continue
+            try:
+                fp = Path(p)
+                if fp.resolve().parent == updir and fp.is_file():
+                    fp.unlink()
+                    removed.append(fp.name)
+            except OSError:
+                pass
+        frames = list((Path("data/media-cache")).glob(f"src{sid}-*.jpg"))
+        for fp in frames:
+            try: fp.unlink()
+            except OSError: pass
+        return {"deleted": sid, "sentences_source": r["kind"],
+                "files_removed": removed, "frames_removed": len(frames)}
 
     @app.get("/api/media/{sid}/{kind}")
     def media(sid: int, kind: str, fmt: str = ""):
@@ -204,9 +462,11 @@ def create_app(db_path: str | Path) -> FastAPI:
             import json as _j
             from . import ffmpeg as _ff
             meta = _j.loads(r["meta"] or "{}")
-            video = Path(r["path"])
-            if not video.exists():
-                raise HTTPException(410, "video moved or deleted")
+            # current sources keep only the extracted audio track; older
+            # ones point at a full video file
+            media_path = Path(meta["audio"]) if meta.get("audio") else Path(r["path"])
+            if not media_path.exists():
+                raise HTTPException(410, "source audio file moved or deleted")
             try:
                 start, end = float(r["start"]), float(r["end"])
             except (TypeError, ValueError):
@@ -214,11 +474,17 @@ def create_app(db_path: str | Path) -> FastAPI:
             try:
                 if kind == "audio":
                     ext = fmt if fmt in ("mp3", "m4a", "wav", "ogg") else "mp3"
-                    p = _ff.cut_audio(video, start, end, ext, meta=meta,
-                                      pad=meta.get("pad"))
+                    p = _ff.cut_audio(media_path, start, end, ext, meta=meta)
                     return FileResponse(p, filename=f"as-{sid}.{ext}",
                                         headers={"Cache-Control": "private, max-age=3600"})
-                p = _ff.grab_frame(video, start + (end - start) * 0.4, meta=meta)
+                p = _ff.cached_frame(r["source_id"], r["ref"])
+                if p is None and Path(r["path"]).exists():
+                    # legacy source that still has its video file
+                    p = _ff.grab_frame(Path(r["path"]),
+                                       start + (end - start) * 0.4, meta=meta)
+                if p is None:
+                    raise HTTPException(404, "no frame for this cue "
+                                             "(video files are deleted after import)")
                 return FileResponse(p, media_type="image/jpeg",
                                     headers={"Cache-Control": "private, max-age=3600"})
             except _sp.CalledProcessError:
@@ -271,40 +537,15 @@ def create_app(db_path: str | Path) -> FastAPI:
         from .exporter import build_deck
         if req.preset not in ("immersion", "reading"):
             raise HTTPException(400, "preset must be immersion|reading")
+
+        def pad(v):
+            return max(0.0, min(5.0, v)) if v is not None else None
         res = build_deck(store, req.name, req.preset, req.status,
                          req.source, req.level, out_dir=req.out_dir,
-                         pad=(max(0.0, min(5.0, req.pad))
-                              if req.pad is not None else None))
+                         pad_start=pad(req.pad_start), pad_end=pad(req.pad_end))
         if "error" in res:
             raise HTTPException(400, res["error"])
         return res
-
-    @app.get("/api/browse")
-    def browse(path: str = "~", exts: str = ""):
-        """List directories; with ?exts=mp4,mkv also matching files
-        (for path pickers that choose a file, not a folder)."""
-        p = Path(path).expanduser()
-        try:
-            if p.is_dir():
-                p = p.resolve()
-        except OSError:
-            pass
-        if not p.is_dir():
-            p = Path.home()
-        ext_list = {("." + e.lower().lstrip(".")) for e in exts.split(",") if e.strip()}
-        dirs, files = [], []
-        try:
-            for e in sorted(p.iterdir(), key=lambda x: x.name.lower()):
-                if e.name.startswith("."):
-                    continue
-                if e.is_dir():
-                    dirs.append(e.name)
-                elif ext_list and e.suffix.lower() in ext_list:
-                    files.append(e.name)
-        except PermissionError:
-            pass
-        return {"path": str(p), "parent": str(p.parent) if p.parent != p else "",
-                "dirs": dirs, "files": files}
 
     @app.get("/api/export/file")
     def export_file(name: str):

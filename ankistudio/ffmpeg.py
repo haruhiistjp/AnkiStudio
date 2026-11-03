@@ -36,25 +36,35 @@ def _run(args: list[str]) -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def cut_audio(video: Path, start: float, end: float, fmt: str = "mp3",
+def _pad_value(v) -> float:
+    return max(0.0, min(5.0, float(v)))
+
+
+def cut_audio(path: Path, start: float, end: float, fmt: str = "mp3",
               meta: dict | None = None, key_extra: tuple = (),
-              pad: float | None = None) -> Path:
-    """Cut [start-pad, end+pad] (shifted times) as an audio file, cached.
-    Larger pads keep dialogue from being clipped prematurely."""
-    pad = PAD if pad is None else max(0.0, min(5.0, float(pad)))
+              pad_start: float | None = None,
+              pad_end: float | None = None) -> Path:
+    """Cut [start-lead, end+tail] (shifted times) as an audio file, cached.
+    Lead/tail padding come from the explicit arguments or the source meta
+    (pad_start/pad_end, falling back to the old single-sided `pad`)."""
     meta = meta or {}
-    s = max(0.0, effective_time(start, meta) - pad)
-    e = effective_time(end, meta) + pad
+    lead = _pad_value(pad_start if pad_start is not None
+                      else meta.get("pad_start", meta.get("pad", PAD)))
+    tail = _pad_value(pad_end if pad_end is not None
+                      else meta.get("pad_end", meta.get("pad", PAD)))
+    s = max(0.0, effective_time(start, meta) - lead)
+    e = effective_time(end, meta) + tail
     dur = max(0.3, e - s)
     enc = {"mp3": ["-vn", "-acodec", "libmp3lame", "-q:a", "4"],
            "m4a": ["-vn", "-acodec", "aac", "-b:a", "128k"],
            "wav": ["-vn", "-acodec", "pcm_s16le"],
            "ogg": ["-vn", "-acodec", "libvorbis", "-q:a", "4"]}[fmt]
-    out = _cache_path("cut", (str(video), video.stat().st_mtime,
-                              round(s, 2), round(dur, 2), fmt, pad, key_extra), fmt)
+    out = _cache_path("cut", (str(path), path.stat().st_mtime,
+                              round(s, 2), round(dur, 2), fmt, lead, tail,
+                              key_extra), fmt)
     if not out.exists():
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        _run(["-ss", f"{s:.3f}", "-t", f"{dur:.3f}", "-i", str(video), *enc,
+        _run(["-ss", f"{s:.3f}", "-t", f"{dur:.3f}", "-i", str(path), *enc,
               str(out)])
     return out
 
@@ -69,6 +79,84 @@ def grab_frame(video: Path, t: float, meta: dict | None = None,
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         _run(["-ss", f"{s:.3f}", "-i", str(video), "-frames:v", "1",
               "-vf", f"scale={width}:-2", str(out)])
+    return out
+
+
+# ---------- video-import pipeline: keep only audio + frames ----------
+
+def _ffprobe(args: list[str]) -> dict:
+    import json
+    r = subprocess.run(["ffprobe", "-v", "error", *args, "-of", "json"],
+                       check=True, capture_output=True, text=True)
+    return json.loads(r.stdout or "{}")
+
+
+def probe_audio(path: Path) -> dict:
+    """Audio streams of a file, with the suggested Japanese default.
+    `aindex` is the stream's ordinal among audio streams (what ffmpeg
+    `-map 0:a:N` expects), `index` its global stream id."""
+    data = _ffprobe(["-select_streams", "a", "-show_entries",
+                     "stream=index,codec_name,channels:"
+                     "stream_tags=language,title", str(path)])
+    streams = []
+    for n, s in enumerate(data.get("streams", [])):
+        tags = s.get("tags") or {}
+        streams.append({"aindex": n, "index": s.get("index", n),
+                        "codec": s.get("codec_name", "?"),
+                        "channels": s.get("channels", "?"),
+                        "lang": (tags.get("language") or "").strip(),
+                        "title": (tags.get("title") or "").strip()})
+    default = next((s["aindex"] for s in streams
+                    if s["lang"].lower() in ("ja", "jp", "jpn")), None)
+    if default is None:
+        import re as _re
+        default = next((s["aindex"] for s in streams
+                        if _re.search(r"jap|jpn|日本", s["title"], _re.I)), None)
+    return {"streams": streams, "default": default if default is not None else 0}
+
+
+def stream_label(s: dict) -> str:
+    bits = [f"#{s['aindex']}"]
+    if s["lang"]:
+        bits.append(s["lang"])
+    if s["title"]:
+        bits.append(s["title"][:24])
+    bits.append(f"{s['codec']} {s['channels']}ch")
+    return " · ".join(bits)
+
+
+def extract_audio(video: Path, aindex: int, out_dir: Path, stem: str) -> Path:
+    """Copy one audio track out of the video into a small .mka — no
+    re-encode, a few % of the video's size. This is the only part of the
+    video the project keeps long-term."""
+    import re as _re
+    import uuid as _uuid
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = _re.sub(r"[^\w.\-]+", "_", stem).strip("._") or "audio"
+    out = out_dir / f"{_uuid.uuid4().hex[:8]}-{safe}.mka"
+    _run(["-i", str(video), "-map", f"0:a:{aindex}",
+          "-c:a", "copy", str(out)])
+    return out
+
+
+def frame_cache_path(source_id: int, ref: str) -> Path:
+    """Deterministic per-cue frame location, so frames grabbed at import
+    time stay findable after the video file itself is deleted."""
+    return CACHE_DIR / f"src{source_id}-{ref}.jpg"
+
+
+def cached_frame(source_id: int, ref: str) -> Path | None:
+    p = frame_cache_path(source_id, str(ref))
+    return p if p.exists() else None
+
+
+def grab_frame_to(video: Path, t: float, out: Path, meta: dict | None = None,
+                  width: int = 640) -> Path:
+    meta = meta or {}
+    s = max(0.0, effective_time(t, meta))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _run(["-ss", f"{s:.3f}", "-i", str(video), "-frames:v", "1",
+          "-vf", f"scale={width}:-2", str(out)])
     return out
 
 

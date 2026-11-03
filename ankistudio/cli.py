@@ -25,6 +25,11 @@ def main() -> int:
     p_vid.add_argument("video")
     p_vid.add_argument("subs")
     p_vid.add_argument("--offset", type=float, default=0.0)
+    p_vid.add_argument("--astream", type=int, default=None,
+                       help="audio track ordinal (default: auto — Japanese)")
+    p_vid.add_argument("--sub-lang", default="auto",
+                       choices=["auto", "ja", "zh", "all"],
+                       help="bilingual subs: keep one language (default: auto)")
 
     p_frq = sub.add_parser("freq", help="import a frequency list (tsv or apkg)")
     p_frq.add_argument("path")
@@ -58,7 +63,9 @@ def main() -> int:
         from .importer import import_video
         from .store import Store
         store = Store(db)
-        r = import_video(store, args.video, args.subs, offset=args.offset)
+        r = import_video(store, args.video, args.subs, offset=args.offset,
+                         astream=args.astream,
+                         sub_lang="" if args.sub_lang == "all" else args.sub_lang)
         print(f"{args.video}: {r['cues']} cues, {r['kept']} kept")
         store.close()
         return 0

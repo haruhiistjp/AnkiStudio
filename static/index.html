@@ -87,16 +87,7 @@ form.box input { width:100%; }
 .cardbox .front-label { font-size:10.5px; letter-spacing:.08em; color:var(--muted);
   text-transform:uppercase; margin-bottom:10px; }
 #preview .note { text-align:center; color:var(--muted); font-size:11.5px; margin-top:8px; }
-#dirmodal { display:none; position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.35); }
-#dirmodal.open { display:flex; align-items:center; justify-content:center; }
-#dirmodal .inner { background:var(--card); border:1px solid var(--line); border-radius:12px;
-  min-width:340px; max-width:520px; max-height:70vh; display:flex; flex-direction:column; padding:14px; }
-#dirmodal .path { font-size:12.5px; color:var(--muted); margin-bottom:8px; word-break:break-all; }
-#dirmodal .list { overflow-y:auto; flex:1; }
-#dirmodal .list a { display:block; padding:6px 8px; border-radius:6px; cursor:pointer;
-  text-decoration:none; color:var(--ink); font-size:13.5px; }
-#dirmodal .list a:hover { background:var(--hov); }
-#dirmodal .row { margin-top:10px; }
+.pkname { font-size:12.5px; word-break:break-all; }
 </style>
 </head>
 <body>
@@ -125,14 +116,6 @@ form.box input { width:100%; }
   </aside>
   <main id="view"></main>
 </div>
-<div id="dirmodal"><div class="inner">
-  <b>Pick a folder</b>
-  <div class="path" id="dm-path"></div>
-  <div class="list" id="dm-list"></div>
-  <div class="row"><button id="dm-up">← up</button>
-    <button id="dm-here" class="primary">Choose this folder</button>
-    <button id="dm-cancel">Cancel</button></div>
-</div></div>
 <div id="preview">
   <div class="top">
     <button class="primary" id="pv-flip">Show back</button>
@@ -325,20 +308,21 @@ async function showSources() {
   const f = es('div'); f.className = 'box';
   f.innerHTML =
     '<h2 style="font-size:15px">Import Anki deck (.apkg)</h2>' +
-    '<label>path to .apkg (absolute or ~)</label>' +
-    '<div class="row" style="margin:0"><input id="ipath" placeholder="/path/to/deck.apkg" style="flex:1">' +
-    '<button id="ibrowse">Browse…</button></div>' +
+    pickHTML('ifile', 'deck file', '.apkg') +
     '<label>max characters per sentence</label><input id="imax" type="number" value="60">' +
     '<button class="primary" id="igo" style="margin-top:12px">Import</button>' +
     '<div id="msg"></div>';
   $('#view').append(f);
-  $('#ibrowse').onclick = () => dmOpen($('#ipath'), '~', 'apkg');
   $('#igo').onclick = async () => {
-    $('#msg').textContent = 'importing…';
+    const file = $('#ifile').files[0];
+    if (!file) { $('#msg').textContent = 'choose a .apkg file first'; return; }
+    $('#msg').textContent = 'uploading…';
     try {
+      const up = await uploadFile(file);
+      $('#msg').textContent = 'importing…';
       const r = await api('/api/import/apkg', { method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ path: $('#ipath').value, max_chars: +$('#imax').value }) });
+        body: JSON.stringify({ path: up.path, max_chars: +$('#imax').value }) });
       $('#msg').textContent = `imported: ${r.notes} notes, ${r.kept} kept, drops ${JSON.stringify(r.drops)}`;
       setTimeout(showSources, 1200);
     } catch (e) { $('#msg').textContent = 'error: ' + e.message; }
@@ -346,52 +330,176 @@ async function showSources() {
   const vf = es('div'); vf.className = 'box'; vf.style.marginTop = '18px';
   vf.innerHTML =
     '<h2 style="font-size:15px">Import video + subtitles</h2>' +
-    '<label>video file</label>' +
-    '<div class="row" style="margin:0"><input id="vv" placeholder="/path/to/episode.mp4" style="flex:1">' +
-    '<button id="vvb">Browse…</button></div>' +
-    '<label>subtitles (.srt / .vtt / .ass)</label>' +
-    '<div class="row" style="margin:0"><input id="vs" placeholder="/path/to/episode.ja.srt" style="flex:1">' +
-    '<button id="vsb">Browse…</button></div>' +
-    '<label>global offset, seconds (+ later, − earlier)</label><input id="vo" type="number" step="0.1" value="0">' +
-    '<label>audio padding, seconds — keeps dialogue from being clipped</label>' +
-    '<input id="vpad" type="number" step="0.05" min="0" max="5" value="0.35">' +
+    pickHTML('vv', 'video file', '.mp4,.mkv,.m4v,.avi,.mov,.webm,.ts') +
+    pickHTML('vs', 'subtitles (.srt / .vtt / .ass)', '.srt,.vtt,.ass') +
+    '<p class="hint">picked with the system dialog — the video is read once, ' +
+    'the chosen audio track and frame images are kept, the video itself is not stored.</p>' +
+    '<div id="vopts"></div>' +
+    '<label>global offset, seconds (+ later, − earlier) — e.g. the drift measured for this release</label>' +
+    '<input id="vo" type="number" step="0.05" value="0">' +
+    '<div class="row" style="margin:0">' +
+    '<label style="margin:0">lead pad (s)<input id="vps" type="number" step="0.05" min="0" max="5" value="0.35" style="width:80px"></label>' +
+    '<label style="margin:0">tail pad (s)<input id="vpe" type="number" step="0.05" min="0" max="5" value="0.35" style="width:80px"></label>' +
+    '</div>' +
+    '<p class="hint">audio clips are cut on demand with these settings — they stay editable on ' +
+    'the source below (where Whisper can also measure the offset for you).</p>' +
     '<button class="primary" id="vgo" style="margin-top:12px">Import</button>' +
     '<div id="vmsg" class="dim" style="margin-top:8px"></div>';
   $('#view').append(vf);
-  $('#vvb').onclick = () => dmOpen($('#vv'), '~', 'mp4,mkv,m4v,avi,mov,webm');
-  $('#vsb').onclick = () => dmOpen($('#vs'), '~', 'srt,vtt,ass');
+  const streamLabel = (s) =>
+    `#${s.aindex}${s.lang ? ' · ' + s.lang : ''}${s.title ? ' · ' + s.title.slice(0, 24) : ''}` +
+    ` · ${s.codec} ${s.channels}ch`;
+  let VS = null;                    // staged-import state between clicks
+  const vReset = () => {
+    VS = null; $('#vopts').innerHTML = '';
+    $('#vgo').textContent = 'Import';
+  };
+  $('#vv').addEventListener('change', vReset);
+  $('#vs').addEventListener('change', vReset);
   $('#vgo').onclick = async () => {
-    $('#vmsg').textContent = 'importing…';
+    const vfile = $('#vv').files[0], sfile = $('#vs').files[0];
+    if (!vfile || !sfile) {
+      $('#vmsg').textContent = 'choose both the video and the subtitles file'; return;
+    }
+    const btn = $('#vgo');
+    btn.disabled = true;
     try {
+      VS = VS || {};
+      if (!VS.subs) {
+        $('#vmsg').textContent = 'uploading subtitles…';
+        VS.subs = await uploadFile(sfile);
+        VS.subInfo = await api('/api/analyze-subs', { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ path: VS.subs.path }) });
+      }
+      if (VS.subInfo.bilingual && !VS.langDone) {
+        const jaShare = Math.round(100 * VS.subInfo.kana_lines /
+                                   Math.max(1, VS.subInfo.total));
+        $('#vopts').innerHTML =
+          '<label>these subtitles carry two languages (Japanese + Chinese) — language to keep</label>' +
+          '<select id="vlang">' +
+          `<option value="ja"${jaShare >= 50 ? ' selected' : ''}>Japanese (the kana lines)</option>` +
+          `<option value="zh"${jaShare < 50 ? ' selected' : ''}>Chinese</option>` +
+          '<option value="">keep everything</option></select>';
+        btn.textContent = 'Continue →';
+        VS.langDone = true;
+        $('#vmsg').textContent =
+          `two languages detected (${VS.subInfo.total} cues, ` +
+          `${jaShare}% Japanese) — pick what to keep, then Continue`;
+        return;
+      }
+      if (!VS.video) {
+        const vup = await uploadFile(vfile, (l, t) => {
+          $('#vmsg').textContent =
+            `reading video… ${Math.round(100 * l / t)}% of ${fmtSize(t)}`;
+        }, true);
+        const probe = await api('/api/probe-video', { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ path: vup.path }) });
+        VS.video = vup;               // only committed once the probe worked
+        VS.probe = probe;
+      }
+      if (!VS.ready) {
+        if (VS.probe.streams.length > 1) {
+          $('#vopts').insertAdjacentHTML('beforeend',
+            '<label>audio track in this video</label><select id="vtrack">' +
+            VS.probe.streams.map(s =>
+              `<option value="${s.aindex}"${s.aindex === VS.probe.default ? ' selected' : ''}>` +
+              `${esc(streamLabel(s))}</option>`).join('') +
+            '</select>');
+        }
+        $('#vopts').insertAdjacentHTML('beforeend',
+          '<div class="row" style="margin-top:10px">' +
+          '<button type="button" class="pdet" title="transcribe a few cues from the picked audio track and measure the subtitle drift">✦ Detect shift now</button>' +
+          '<span class="pdres dim"></span></div>');
+        const pdet = $('#vopts .pdet'), pres = $('#vopts .pdres');
+        const pdetRun = () => runDetect(pres, '/api/whisper/pre',
+          { video: VS.video.path, subs: VS.subs.path,
+            astream: $('#vtrack') ? +$('#vtrack').value : null,
+            sub_lang: $('#vlang') ? $('#vlang').value : 'auto' },
+          (median) => () => {
+            $('#vo').value = median;
+            pres.textContent = `offset set to ${median}s ✓ — now Import`;
+          });
+        pdet.onclick = async () => {
+          pdet.disabled = true;
+          try { await pdetRun(); }
+          catch (e) { whisperFail(pres, e, () => { pdet.disabled = false; pdetRun(); }); }
+          finally { pdet.disabled = false; }
+        };
+        btn.textContent = 'Import';
+        VS.ready = true;
+        $('#vmsg').textContent =
+          'ready to import — ✦ detect the shift now (recommended: frame images are timed with this offset), then Import';
+        return;
+      }
+      const langSel = $('#vlang'), trackSel = $('#vtrack');
+      $('#vmsg').textContent =
+        'importing: extracting the audio track and grabbing frame images — this can take a minute or two…';
       const r = await api('/api/import/video', { method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ video: $('#vv').value, subs: $('#vs').value,
-                               offset: +$('#vo').value,
-                               pad: +$('#vpad').value || 0.35 }) });
-      $('#vmsg').textContent = `imported: ${r.cues} cues, ${r.kept} kept`;
-      setTimeout(showSources, 1200);
-    } catch (e) { $('#vmsg').textContent = 'error: ' + e.message; }
+        body: JSON.stringify({ video: VS.video.path, subs: VS.subs.path,
+                               offset: +$('#vo').value || 0,
+                               pad_start: +$('#vps').value || 0,
+                               pad_end: +$('#vpe').value || 0,
+                               name: VS.video.name.replace(/\.[^.]+$/, ''),
+                               astream: trackSel ? +trackSel.value : null,
+                               sub_lang: langSel ? langSel.value : 'auto' }) });
+      $('#vmsg').textContent =
+        `imported: ${r.cues} cues, ${r.kept} kept, ${r.frames} frames · audio ${r.audio_track}` +
+        (r.sub_lang ? ` · subtitles kept ${r.sub_lang === 'ja' ? 'Japanese' : 'Chinese'}` : '');
+      setTimeout(showSources, 1800);
+    } catch (e) {
+      $('#vmsg').textContent = 'error: ' + e.message;
+    } finally {
+      btn.disabled = false;
+    }
   };
   if (d.sources.length) {
     const t = es('table'); t.style.marginTop = '18px';
-    t.innerHTML = '<tr><th>source</th><th>kind</th><th>path</th><th>sentences</th><th>kept</th></tr>' +
+    t.innerHTML = '<tr><th>source</th><th>kind</th><th>path</th><th>sentences</th><th>kept</th><th></th></tr>' +
       d.sources.map(s => `<tr><td>${esc(s.name)}</td><td class="dim">${s.kind}</td>` +
-        `<td class="dim">${esc(s.path || '')}</td><td>${s.sentences}</td><td>${s.kept}</td></tr>`).join('');
+        `<td class="dim">${esc(s.path || '')}</td><td>${s.sentences}</td><td>${s.kept}</td>` +
+        `<td><button class="no" data-del="${s.id}" title="delete this source, its sentences and its stored media">✕</button></td></tr>`).join('');
     $('#view').append(t);
+    for (const b of t.querySelectorAll('button[data-del]')) {
+      b.onclick = async () => {
+        const s = d.sources.find(x => x.id === +b.dataset.del);
+        if (!confirm(`Delete source "${s.name}" and its ${s.sentences} sentences?\n` +
+                     'Media files owned only by it (stored audio / decks) are removed too.'))
+          return;
+        try { await api('/api/source/' + s.id, { method: 'DELETE' }); }
+        catch (e) { alert('error: ' + e.message); }
+        showSources();
+      };
+    }
     const vids = d.sources.filter(s => s.kind === 'video');
     for (const v of vids) {
       const box = es('div'); box.className = 'box'; box.style.marginTop = '14px';
       box.innerHTML =
-        `<h2 style="font-size:15px">Subtitle shift — ${esc(v.name)}</h2>` +
-        '<p class="hint">Cue times are originals; shifts apply when audio is cut. ' +
-        'Each segment = "from this cue time on, the TOTAL shift is X seconds".</p>' +
-        '<label>global offset (s)</label><input class="voff" type="number" step="0.1">' +
-        '<label>audio padding (s)</label><input class="vpad" type="number" step="0.05" min="0" max="5">' +
+        '<input class="sname" value="' + esc(v.name) + '" ' +
+        'title="rename this source" style="font-size:15px;font-weight:600;' +
+        'border:none;border-bottom:1px dashed var(--line);background:transparent;' +
+        'padding:0 0 2px;margin:0 0 10px;width:100%;color:var(--ink)">' +
+        '<div class="row" style="margin-bottom:6px">' +
+        '<label style="margin:0">offset (s)<input class="voff" type="number" step="0.05" style="width:90px"></label>' +
+        '<label style="margin:0">lead pad (s)<input class="vps" type="number" step="0.05" min="0" max="5" style="width:80px"></label>' +
+        '<label style="margin:0">tail pad (s)<input class="vpe" type="number" step="0.05" min="0" max="5" style="width:80px"></label>' +
+        '</div>' +
+        '<p class="hint">cue times are originals — shifts apply when audio is cut. ' +
+        'Each segment = "from this cue time on, the TOTAL shift is X seconds".<br>' +
+        'audio clips are cut fresh from the stored full-length track on every preview ' +
+        'and export — changing anything here is always exact. Frame images, however, ' +
+        'are grabbed once at import: for perfectly timed frames, run ✦ Detect in the ' +
+        'import form before importing.</p>' +
         '<div class="segs"></div>' +
         '<div class="row" style="margin-top:8px">' +
         '<button class="addseg">+ segment</button>' +
-        '<button class="primary save">Save shifts</button>' +
-        '<span class="msg dim"></span></div>';
+        '<button class="primary save">Save</button>' +
+        '<button class="wsp" title="transcribe a few cues with Whisper and estimate the global shift">✦ Detect shift</button>' +
+        `<a class="btn" href="/api/video/${v.id}/subs" download title="the original subtitle file with this source's offset and segments applied">⤓ Fixed subtitles</a>` +
+        '<span class="msg dim"></span></div>' +
+        '<div class="wsres dim" style="margin-top:6px"></div>';
       $('#view').append(box);
       loadShift(box, v.id);
     }
@@ -401,7 +509,10 @@ async function showSources() {
 async function loadShift(box, sid) {
   const meta = await api(`/api/video/${sid}`);
   box.querySelector('.voff').value = meta.offset || 0;
-  box.querySelector('.vpad').value = meta.pad != null ? meta.pad : 0.35;
+  box.querySelector('.vps').value = meta.pad_start != null ? meta.pad_start
+    : (meta.pad != null ? meta.pad : 0.35);
+  box.querySelector('.vpe').value = meta.pad_end != null ? meta.pad_end
+    : (meta.pad != null ? meta.pad : 0.35);
   const segs = box.querySelector('.segs');
   const addSeg = (at = '', shift = '') => {
     const r = es('div'); r.className = 'row'; r.style.marginTop = '6px';
@@ -413,7 +524,7 @@ async function loadShift(box, sid) {
   };
   for (const g of (meta.segments || [])) addSeg(g.at, g.shift);
   box.querySelector('.addseg').onclick = () => addSeg();
-  box.querySelector('.save').onclick = async () => {
+  const save = async () => {
     const segments = [...segs.querySelectorAll('.row')].map(r => ({
       at: +r.querySelector('.at').value || 0,
       shift: +r.querySelector('.sh').value || 0 }));
@@ -421,8 +532,26 @@ async function loadShift(box, sid) {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ offset: +box.querySelector('.voff').value || 0,
                              segments,
-                             pad: +box.querySelector('.vpad').value }) });
+                             pad_start: +box.querySelector('.vps').value || 0,
+                             pad_end: +box.querySelector('.vpe').value || 0,
+                             name: box.querySelector('.sname').value }) });
     box.querySelector('.msg').textContent = 'saved ✓';
+    return r;
+  };
+  box.querySelector('.save').onclick = save;
+  // Whisper-based global-shift detection (analysis only; Apply writes it)
+  const wsp = box.querySelector('.wsp'), wres = box.querySelector('.wsres');
+  const wspRun = () => runDetect(wres, `/api/video/${sid}/whisper`, {},
+    (median) => async () => {
+      box.querySelector('.voff').value = median;
+      await save();
+      wres.textContent = `offset set to ${median}s ✓`;
+    });
+  wsp.onclick = async () => {
+    wsp.disabled = true;
+    try { await wspRun(); }
+    catch (e) { whisperFail(wres, e, () => { wsp.disabled = false; wspRun(); }); }
+    finally { wsp.disabled = false; }
   };
 }
 
@@ -433,22 +562,23 @@ async function showLexicons() {
   const f = es('div'); f.className = 'box';
   f.innerHTML =
     '<h2 style="font-size:15px">Import frequency list</h2>' +
-    '<label>path — .tsv/.csv (word, level, rank) or an .apkg deck like Kaishi</label>' +
-    '<div class="row" style="margin:0"><input id="lpath" placeholder="/path/to/list.tsv or kaishi.apkg" style="flex:1">' +
-    '<button id="lbrowse">Browse…</button></div>' +
+    pickHTML('lfile', 'file — .tsv/.csv (word, level, rank) or an .apkg deck like Kaishi',
+             '.tsv,.csv,.apkg,.txt') +
     '<button class="primary" id="lgo" style="margin-top:12px">Import</button>' +
     '<div id="msg"></div>' +
     '<p class="hint">Levels power the level filter in the card browser ' +
     '(a sentence shows at the easiest level whose words it contains).</p>';
   $('#view').append(f);
-  $('#lbrowse').onclick = () => dmOpen($('#lpath'), '~', 'tsv,csv,apkg,txt');
   $('#lgo').onclick = async () => {
-    const p = $('#lpath').value;
-    const url = p.endsWith('.apkg') ? '/api/import/freq-apkg' : '/api/import/freq-tsv';
-    $('#msg').textContent = 'importing…';
+    const file = $('#lfile').files[0];
+    if (!file) { $('#msg').textContent = 'choose a file first'; return; }
+    const url = /\.apkg$/i.test(file.name) ? '/api/import/freq-apkg' : '/api/import/freq-tsv';
+    $('#msg').textContent = 'uploading…';
     try {
+      const up = await uploadFile(file);
+      $('#msg').textContent = 'importing…';
       await api(url, { method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ path: p }) });
+        body: JSON.stringify({ path: up.path }) });
       $('#msg').textContent = 'imported ✓';
       setTimeout(showLexicons, 800);
     } catch (e) { $('#msg').textContent = 'error: ' + e.message; }
@@ -562,11 +692,13 @@ async function showExport() {
       .map(l => `<option>${esc(l)}</option>`).join('') : '');
   f.innerHTML =
     '<label>deck name</label><input id="xname" value="AnkiStudio export">' +
-    '<label>output folder</label>' +
-    '<div class="row" style="margin:0"><input id="xdir" value="result" style="flex:1">' +
-    '<button id="xbrowse">Browse…</button></div>' +
+    '<label>output folder</label><input id="xdir" value="result">' +
+    '<p class="hint">relative to the project folder (or absolute)</p>' +
     '<label>audio padding for video cuts, seconds — blank = each source\'s own setting</label>' +
-    '<input id="xpad" type="number" step="0.05" min="0" max="5" placeholder="source default">' +
+    '<div class="row" style="margin:0">' +
+    '<label style="margin:0">lead<input id="xps" type="number" step="0.05" min="0" max="5" placeholder="src" style="width:80px"></label>' +
+    '<label style="margin:0">tail<input id="xpe" type="number" step="0.05" min="0" max="5" placeholder="src" style="width:80px"></label>' +
+    '</div>' +
     '<label>preset (what goes on the card)</label>' +
     '<select id="xpreset"><option value="immersion">immersion — front: image + audio; back: sentence, reading, translation</option>' +
     '<option value="reading">reading — front: sentence; back: reading, translation, audio</option></select>' +
@@ -579,7 +711,6 @@ async function showExport() {
     '<button class="primary" id="xgo" style="margin-top:14px">Build .apkg</button>' +
     '<div id="xres" class="dim" style="margin-top:10px"></div>';
   $('#view').append(f);
-  $('#xbrowse').onclick = () => dmOpen($('#xdir'), $('#xdir').value);
   $('#xgo').onclick = async () => {
     $('#xres').textContent = 'building…';
     try {
@@ -589,58 +720,139 @@ async function showExport() {
           preset: $('#xpreset').value, status: $('#xstatus').value,
           source: +$('#xsrc').value, level: $('#xlev').value,
           out_dir: $('#xdir').value,
-          pad: $('#xpad').value === '' ? null : +$('#xpad').value }) });
+          pad_start: $('#xps').value === '' ? null : +$('#xps').value,
+          pad_end: $('#xpe').value === '' ? null : +$('#xpe').value }) });
       $('#xres').innerHTML = `✓ ${r.notes} notes, ${r.media_files} media → ` +
-        `<a href="/api/export/file?name=${encodeURIComponent(r.path)}">${esc(r.path.split('/').pop())}</a>`;
+        `<a href="/api/export/file?name=${encodeURIComponent(r.path)}" download>${esc(r.path.split('/').pop())}</a>`;
     } catch (e) { $('#xres').textContent = 'error: ' + e.message; }
   };
 }
 
-/* ---------- directory browse modal ---------- */
-let DM = { target: null, path: '', exts: '' };
-async function dmOpen(target, start, exts) {
-  DM.target = target;
-  DM.exts = exts || '';
-  const d = await api('/api/browse?path=' + encodeURIComponent(start || '~') +
-    (DM.exts ? '&exts=' + encodeURIComponent(DM.exts) : ''));
-  dmRender(d);
-  $('#dirmodal').classList.add('open');
+/* ---------- native file pickers + upload ---------- */
+const fmtSize = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB'
+  : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.ceil(n / 1e3) + ' KB';
+
+const pickHTML = (id, label, accept) =>
+  `<label>${label}</label>` +
+  `<div class="row" style="margin:0">` +
+  `<input type="file" id="${id}" accept="${accept}" hidden>` +
+  `<button type="button" class="pk" data-for="${id}">Choose…</button>` +
+  `<span class="pkname dim" id="${id}name"></span></div>`;
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('button.pk');
+  if (b) document.getElementById(b.dataset.for)?.click();
+});
+document.addEventListener('change', (e) => {
+  if (!e.target.matches('input[type=file]')) return;
+  const name = document.getElementById(e.target.id + 'name');
+  const f = e.target.files[0];
+  if (name) name.textContent = f ? `✓ ${f.name} (${fmtSize(f.size)})` : '';
+});
+
+function uploadFile(file, onprog, temp) {
+  return new Promise((res, rej) => {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const x = new XMLHttpRequest();
+    x.open('POST', '/api/upload' + (temp ? '?temp=1' : ''));
+    x.upload.onprogress = (e) => {
+      if (e.lengthComputable && onprog) onprog(e.loaded, e.total);
+    };
+    x.onload = () => {
+      try {
+        const d = JSON.parse(x.responseText);
+        (x.status >= 200 && x.status < 300) ? res(d)
+          : rej(new Error(d.detail || 'upload failed (' + x.status + ')'));
+      } catch { rej(new Error('upload failed (' + x.status + ')')); }
+    };
+    x.onerror = () => rej(new Error('upload failed — is the server running?'));
+    x.send(fd);
+  });
 }
-function dmBrowse(path) {
-  return api('/api/browse?path=' + encodeURIComponent(path) +
-    (DM.exts ? '&exts=' + encodeURIComponent(DM.exts) : ''));
-}
-function dmRender(d) {
-  DM.path = d.path;
-  $('#dm-path').textContent = d.path;
-  const list = $('#dm-list');
-  list.innerHTML = '';
-  if (d.parent) {
-    const up = es('a'); up.textContent = '⬆ ..';
-    up.onclick = () => dmBrowse(d.parent).then(dmRender);
-    list.appendChild(up);
-  }
-  for (const name of d.dirs) {
-    const a = es('a'); a.textContent = '📁 ' + name;
-    a.onclick = () => dmBrowse(DM.path + '/' + name).then(dmRender);
-    list.appendChild(a);
-  }
-  for (const name of (d.files || [])) {
-    const a = es('a'); a.textContent = '📄 ' + name;
-    a.onclick = () => { DM.target.value = DM.path + '/' + name;
-                        $('#dirmodal').classList.remove('open'); };
-    list.appendChild(a);
+
+/* Whisper detection: server streams one JSON line per measured cue */
+async function apiStream(path, body, onEvent) {
+  const resp = await fetch(path, { method: 'POST',
+    headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.status);
+  const reader = resp.body.getReader(), dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream: true});
+    const lines = buf.split('\n'); buf = lines.pop();
+    for (const ln of lines) if (ln.trim()) onEvent(JSON.parse(ln));
   }
 }
-$('#dm-cancel').onclick = () => $('#dirmodal').classList.remove('open');
-$('#dm-up').onclick = async () => {
-  const d = await dmBrowse(DM.path);
-  if (d.parent) dmBrowse(d.parent).then(dmRender);
-};
-$('#dm-here').onclick = () => {
-  if (DM.target) DM.target.value = DM.path;
-  $('#dirmodal').classList.remove('open');
-};
+
+function renderDetectResult(el, r, onApply) {
+  if (r.median == null) {
+    const heard = r.samples.slice(0, 2).map(s => s.heard)
+      .filter(Boolean).join(' / ');
+    el.textContent = `couldn't measure — ${r.matched}/${r.total} cues matched` +
+      (heard ? ` (whisper heard: «${heard}»)` : '');
+    return;
+  }
+  el.innerHTML = '';
+  const t = es('span');
+  t.textContent = `detected ${r.median >= 0 ? '+' : ''}${r.median}s ` +
+    `(${r.matched}/${r.total} cues${r.consistent ? '' : ' ⚠ cues disagree'}) `;
+  const apply = es('button');
+  apply.textContent = `Use ${r.median >= 0 ? '+' : ''}${r.median}s`;
+  apply.onclick = onApply(r.median);
+  el.append(t, apply);
+}
+
+async function runDetect(el, url, body, onApply) {
+  let n = 0, matched = 0;
+  el.innerHTML = '';
+  el.textContent = 'measuring the first cue…';
+  let final = null, failed = null;
+  await apiStream(url, body, (ev) => {
+    if (ev.sample) {
+      n++;
+      if (ev.sample.offset != null) matched++;
+      const last = ev.sample.offset != null
+        ? `${ev.sample.offset >= 0 ? '+' : ''}${ev.sample.offset}s` : 'no match';
+      el.textContent = `measuring… ${n} done · ${matched} matched · last: ${last}`;
+    } else if (ev.result) {
+      final = ev.result;
+    } else if (ev.error) {
+      failed = ev.error;
+    }
+  });
+  if (failed) throw new Error(failed);
+  if (final) renderDetectResult(el, final, onApply);
+}
+
+function whisperFail(el, e, retry) {
+  if (!/not installed/i.test(e.message)) {
+    el.textContent = 'error: ' + e.message;
+    return;
+  }
+  el.innerHTML = '';
+  const t = es('span');
+  t.textContent = 'whisper is not installed on this machine. ';
+  const inst = es('button');
+  inst.textContent = 'Install Whisper';
+  inst.title = 'creates a small dedicated venv (.venv-whisper) via uv — downloads Python 3.11 + torch + whisper once';
+  inst.onclick = async () => {
+    inst.disabled = true;
+    el.textContent = 'installing whisper — this can take several minutes (Python + torch are downloaded once)…';
+    try {
+      await api('/api/whisper/install', { method: 'POST',
+        headers: {'Content-Type':'application/json'}, body: '{}' });
+      el.textContent = 'whisper installed ✓';
+      retry();
+    } catch (err) {
+      el.textContent = 'error: ' + err.message;
+      inst.disabled = false;
+    }
+  };
+  el.append(t, inst);
+}
 
 /* ---------- router ---------- */
 const VIEWS = { stats: showStats, browse: showBrowse,
