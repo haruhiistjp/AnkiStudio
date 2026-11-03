@@ -50,6 +50,40 @@ class DecideReq(BaseModel):
     decision: str          # approved | discarded | ''
 
 
+class PointsImportReq(BaseModel):
+    yaml_text: str = ""
+    path: str = ""
+
+
+class PoolReq(BaseModel):
+    point: str = ""              # target point (label for approvals)
+    q: str = ""
+    source: int = 0
+    level: str = ""
+    min_len: int = 0
+    max_len: int = 60
+    size: int = 40
+    per_show: int = 3            # max candidates per source
+    balanced: bool = True        # force length spread within each source
+    exclude_deck: bool = True    # skip sentences already in the deck
+
+
+class DeckAddReq(BaseModel):
+    sentence_id: int
+    point: str = ""
+    note: str = ""
+
+
+class DeckUpdateReq(BaseModel):
+    position: int | None = None
+    note: str | None = None
+    point: str | None = None
+
+
+class ProjectOpenReq(BaseModel):
+    path: str
+
+
 class ClassifyReq(BaseModel):
     lexicon_id: int
 
@@ -523,6 +557,169 @@ def create_app(db_path: str | Path) -> FastAPI:
             raise HTTPException(404, "media missing in package")
         return Response(content=data, media_type=ctype,
                         headers={"Cache-Control": "private, max-age=3600"})
+
+    # ---------- deck development: points / pool / deck ----------
+
+    @app.get("/api/points")
+    def points_list():
+        return {"points": [dict(r) for r in store.points()]}
+
+    @app.post("/api/points/import")
+    def points_import(req: PointsImportReq):
+        import yaml as _y
+        text = req.yaml_text
+        if not text and req.path:
+            _ensure_readable(Path(req.path).expanduser(), "points file")
+            text = Path(req.path).expanduser().read_text(encoding="utf-8")
+        if not text:
+            raise HTTPException(400, "no yaml provided")
+        try:
+            data = _y.safe_load(text)
+        except Exception as e:
+            raise HTTPException(400, f"yaml parse error: {e}")
+        rows = []
+        for pt in data or []:
+            pid = pt.get("id")
+            if not pid:
+                continue
+            rows.append({
+                "id": str(pid),
+                "title": (pt.get("title") or {}).get("en") or pt.get("title") or "",
+                "pattern": pt.get("pattern") or "",
+                "level": str(pt.get("level") or ""),
+                "module": str(pt.get("module") or ""),
+                "hints": ",".join(pt.get("target_hint") or [])})
+        if not rows:
+            raise HTTPException(400, "no points with ids found")
+        return {"imported": store.add_points(rows)}
+
+    @app.delete("/api/points/{pid}")
+    def points_delete(pid: str):
+        store.delete_point(pid)
+        return {"deleted": pid}
+
+    @app.post("/api/pool")
+    def pool(req: PoolReq):
+        """Diverse candidate pool for one point/query: per-source caps and
+        length spread fight the 'all short copula fragments' monoculture."""
+        where = ["n.keep=1", "n.decision != 'discarded'"]
+        args: list = []
+        if req.source:
+            where.append("n.source_id=?"); args.append(req.source)
+        if req.level:
+            where.append("n.level=?"); args.append(req.level)
+        if req.q:
+            where.append("n.text like ?"); args.append(f"%{req.q}%")
+        where.append("n.char_len between ? and ?")
+        args += [req.min_len, req.max_len]
+        rows = [dict(r) for r in store.db.execute(
+            f"select n.*, s.name source_name from sentences n"
+            f" join sources s on s.id=n.source_id where {' and '.join(where)}",
+            args)]
+        if req.exclude_deck:
+            in_deck = {r["sentence_id"] for r in store.db.execute(
+                "select sentence_id from deck_items")}
+            rows = [r for r in rows if r["id"] not in in_deck]
+        # per-source cap with optional length spread: split each source's
+        # candidates into quantiles and take round-robin from them
+        by_src: dict[int, list] = {}
+        for r in rows:
+            by_src.setdefault(r["source_id"], []).append(r)
+        queues = []
+        for src_rows in by_src.values():
+            src_rows.sort(key=lambda r: r["char_len"] or 0)
+            if req.balanced and len(src_rows) > req.per_show:
+                n = req.per_show
+                picks = [src_rows[int(i * (len(src_rows) - 1) / max(1, n - 1))]
+                         for i in range(n)] if n > 1 else src_rows[:1]
+                queues.append(picks)
+            else:
+                queues.append(src_rows[:req.per_show])
+        out = []
+        while queues and len(out) < req.size:
+            nxt = []
+            for q in queues:
+                if q and len(out) < req.size:
+                    out.append(q.pop(0))
+                if q:
+                    nxt.append(q)
+            queues = nxt
+        # shuffle lightly so review isn't length-sorted per show
+        import random as _r
+        _r.Random(42).shuffle(out)
+        return {"pool": out, "total_matching": len(rows), "point": req.point}
+
+    @app.get("/api/deck")
+    def deck_list():
+        return {"items": [dict(r) for r in store.deck_items()],
+                "points": [dict(r) for r in store.points()]}
+
+    @app.post("/api/deck/add")
+    def deck_add(req: DeckAddReq):
+        return {"item_id": store.deck_add(req.sentence_id, req.point, req.note)}
+
+    @app.post("/api/deck/{item_id}")
+    def deck_update(item_id: int, req: DeckUpdateReq):
+        store.deck_update(item_id, req.position, req.note, req.point)
+        return {"updated": item_id}
+
+    @app.delete("/api/deck/{item_id}")
+    def deck_remove(item_id: int):
+        store.deck_remove(item_id)
+        return {"removed": item_id}
+
+    # ---------- project (.aproj) ----------
+
+    @app.get("/api/project/save")
+    def project_save(path: str = "", name: str = "ankistudio"):
+        """Snapshot the live store into a portable .aproj (zip: manifest +
+        project.db). Media stays in its sources; the file references them."""
+        import json as _j
+        import zipfile as _z
+        import tempfile as _t
+        out = Path(path).expanduser() if path else None
+        if out and not str(out).endswith(".aproj"):
+            out = out / f"{name}.aproj"
+        if not out:
+            result = Path("result"); result.mkdir(exist_ok=True)
+            out = result / f"{name}.aproj"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with _t.TemporaryDirectory() as td:
+            dbfile = Path(td) / "project.db"
+            store.snapshot_to(dbfile)
+            manifest = {
+                "format": "ankistudio-project", "version": 1,
+                "name": name,
+                "created": __import__("datetime").datetime.now().isoformat(),
+                "app": "AnkiStudio",
+                "sources": [dict(r) for r in store.sources()],
+            }
+            with _z.ZipFile(out, "w", _z.ZIP_DEFLATED) as z:
+                z.writestr("manifest.json", _j.dumps(manifest, ensure_ascii=False, indent=1))
+                z.write(dbfile, "project.db")
+        return {"path": str(out)}
+
+    @app.post("/api/project/open")
+    def project_open(req: ProjectOpenReq):
+        import zipfile as _z
+        import tempfile as _t
+        p = Path(req.path).expanduser()
+        if not p.exists() or p.suffix != ".aproj":
+            raise HTTPException(404, f"not an .aproj file: {p}")
+        try:
+            with _z.ZipFile(p) as z:
+                names = z.namelist()
+                if "project.db" not in names or "manifest.json" not in names:
+                    raise ValueError("not an AnkiStudio project archive")
+                dest_dir = Path("data/projects") / p.stem
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                z.extract("project.db", dest_dir)
+                manifest = __import__("json").loads(z.read("manifest.json"))
+        except (_z.BadZipFile, ValueError) as e:
+            raise HTTPException(400, f"bad .aproj: {e}")
+        store.reopen(dest_dir / "project.db")
+        return {"opened": str(p), "name": manifest.get("name"),
+                "sources": len(manifest.get("sources", []))}
 
     @app.post("/api/classify")
     def classify(req: ClassifyReq):
