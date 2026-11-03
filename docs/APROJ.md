@@ -71,12 +71,12 @@ Unlike a simple "approved examples" export, the `.aproj` contains **every kept s
 
 ### From the CureDolly project
 
+Download `CureDolly.aproj` from the [releases page](https://github.com/haruhiistjp/AnkiStudio/releases) and place it in `data/projects/`.
+
+Or, if you have the CureDolly source repository locally:
+
 ```bash
-cd /Volumes/Ayaneru/AnkiStudio
-.venv/bin/python -c "
-from ankistudio.cd_import import convert_curedolly
-convert_curedolly('/Volumes/Ayaneru/AnkiDecks/CureDolly', 'data/projects/CureDolly.aproj')
-"
+ankistudio convert-curedolly /path/to/CureDolly
 ```
 
 ### From within AnkiStudio
