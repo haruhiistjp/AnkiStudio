@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn>=0.29",
     "genanki>=0.13",
     "Pillow>=10.0",
+    "PyYAML>=6.0",
     "python-multipart>=0.0.9",
 ]
 

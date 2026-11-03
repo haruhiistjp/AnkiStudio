@@ -88,6 +88,33 @@ form.box input { width:100%; }
   text-transform:uppercase; margin-bottom:10px; }
 #preview .note { text-align:center; color:var(--muted); font-size:11.5px; margin-top:8px; }
 .pkname { font-size:12.5px; word-break:break-all; }
+/* ---------- batch review ---------- */
+#rv-card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  max-width:680px; margin:0 auto; padding:26px 22px; text-align:center; min-height:220px; }
+#rv-card .jp { font-size:28px; line-height:1.8; }
+#rv-card .rd { color:var(--muted); font-size:15px; margin-top:8px; }
+#rv-card .tr { font-size:17px; margin-top:12px; }
+#rv-card img { max-width:440px; max-height:220px; border-radius:8px; margin-bottom:12px; }
+#rv-card audio { display:block; margin:14px auto 0; width:100%; max-width:440px; }
+#rv-meta { text-align:center; color:var(--muted); font-size:13px; margin:10px 0 18px; }
+#rv-progress { display:flex; gap:6px; max-width:680px; margin:0 auto 16px; }
+#rv-progress i { flex:1; height:6px; border-radius:3px; background:var(--line); }
+#rv-progress i.ok { background:var(--ok); } #rv-progress i.no { background:var(--bad); }
+#rv-keys { text-align:center; color:var(--muted); font-size:12.5px; margin-top:14px; }
+#rv-keys b { color:var(--ink); }
+/* ---------- deck view ---------- */
+.deckgroup { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  padding:14px 16px; margin-bottom:16px; }
+.deckgroup h3 { margin:0 0 10px; font-size:15px; }
+.deckgroup .balance { font-size:12px; color:var(--muted); margin-left:8px; }
+.drow { display:flex; gap:8px; align-items:flex-start; padding:7px 0;
+  border-top:1px solid var(--line); }
+.drow .jp { flex:1; min-width:0; font-size:15.5px; }
+.drow .meta { color:var(--muted); font-size:11.5px; }
+.drow input.note { border:1px solid var(--line); border-radius:6px; background:var(--bg);
+  color:var(--ink); font-size:12px; padding:4px 6px; width:220px; }
+.drow button { padding:3px 8px; font-size:12px; }
+
 </style>
 </head>
 <body>
@@ -100,6 +127,9 @@ form.box input { width:100%; }
     <div class="sect">Inputs</div>
     <a data-view="sources">Sources</a>
     <a data-view="lexicons">Lexicons</a>
+    <a data-view="points">Grammar points</a>
+    <a data-view="review">Batch review</a>
+    <a data-view="deck">Deck</a>
     <a data-view="export">Export deck</a>
     <div class="sect">Later phases</div>
     <a class="dim">Video + subs</a>
@@ -703,7 +733,8 @@ async function showExport() {
     '<select id="xpreset"><option value="immersion">immersion — front: image + audio; back: sentence, reading, translation</option>' +
     '<option value="reading">reading — front: sentence; back: reading, translation, audio</option></select>' +
     '<label>which sentences</label>' +
-    '<select id="xstatus"><option value="approved">approved only</option>' +
+    '<select id="xstatus"><option value="deck">the deck (ordered, with notes)</option>' +
+    '<option value="approved">approved only</option>' +
     '<option value="pending">pending (not yet reviewed)</option>' +
     '<option value="all">all kept</option></select>' +
     '<select id="xsrc">' + srcOpts + '</select>' +
@@ -855,7 +886,230 @@ function whisperFail(el, e, retry) {
 }
 
 /* ---------- router ---------- */
-const VIEWS = { stats: showStats, browse: showBrowse,
+/* ---------- grammar points ---------- */
+async function showPoints() {
+  const d = await api('/api/points');
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Grammar points</h2>'; $('#view').append(h);
+  const f = es('div'); f.className = 'box';
+  f.innerHTML =
+    '<h2 style="font-size:15px">Import points</h2>' +
+    '<label>paste YAML (list of {id, title, pattern, level, module, target_hint}) or pick the CureDolly points.yaml</label>' +
+    '<textarea id="ptxt" rows="6" style="width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-family:monospace;font-size:12px" placeholder="- id: GP-001"></textarea>' +
+    '<div class="row" style="margin-top:10px">' +
+    '<input id="ppath" placeholder="/path/to/points.yaml" style="flex:1">' +
+    '<button id="pbrowse">Browse…</button>' +
+    '<button class="primary" id="pgo">Import</button></div>' +
+    '<div id="pmsg" class="dim" style="margin-top:8px"></div>';
+  $('#view').append(f);
+  $('#pbrowse').onclick = () => dmOpen($('#ppath'), '~', 'yaml,yml');
+  $('#pgo').onclick = async () => {
+    $('#pmsg').textContent = 'importing…';
+    try {
+      const r = await api('/api/points/import', { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ yaml_text: $('#ptxt').value,
+                               path: $('#ppath').value }) });
+      $('#pmsg').textContent = `imported ${r.imported} points`;
+      setTimeout(showPoints, 900);
+    } catch (e) { $('#pmsg').textContent = 'error: ' + e.message; }
+  };
+  if (d.points.length) {
+    const t = es('table'); t.style.marginTop = '18px';
+    t.innerHTML = '<tr><th>id</th><th>title</th><th>pattern</th><th>level</th><th>module</th><th></th></tr>' +
+      d.points.slice(0, 400).map(p =>
+        `<tr><td><b>${esc(p.id)}</b></td><td>${esc(p.title)}</td>` +
+        `<td class="dim">${esc(p.pattern || '')}</td>` +
+        `<td class="dim">${esc(p.level || '')}</td>` +
+        `<td class="dim">${esc(p.module || '')}</td>` +
+        `<td><button class="no" data-del="${esc(p.id)}">✕</button></td></tr>`).join('');
+    $('#view').append(t);
+    for (const b of t.querySelectorAll('button[data-del]')) {
+      b.onclick = async () => {
+        await api('/api/points/' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
+        showPoints();
+      };
+    }
+  }
+}
+
+/* ---------- batch review (triangle-style) ---------- */
+let RV = { pool: [], i: 0, point: '', done: [], counts: { ok: 0, no: 0, skip: 0 } };
+
+async function showReview() {
+  const d = await api('/api/stats');
+  const pts = await api('/api/points');
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Batch review</h2>'; $('#view').append(h);
+  const f = es('div'); f.className = 'box';
+  const ptOpts = '<option value="">— free label —</option>' +
+    pts.points.map(p => `<option value="${esc(p.id)}">${esc(p.id)} ${esc(p.title)}</option>`).join('');
+  const srcOpts = '<option value="0">all sources</option>' +
+    d.sources.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('');
+  const levOpts = '<option value="">any level</option>' +
+    (d.lexicons[0] ? JSON.parse(d.lexicons[0].level_order || '[]')
+      .map(l => `<option>${esc(l)}</option>`).join('') : '');
+  f.innerHTML =
+    '<label>target grammar point (approved cards join the deck here)</label>' +
+    `<select id="rvpt" style="width:100%">${ptOpts}</select>` +
+    '<label>label (used when the point is free)</label>' +
+    '<input id="rvlabel" placeholder="e.g. L1 · core sentence">' +
+    '<label>text must contain</label><input id="rvq" placeholder="が">' +
+    '<div class="row" style="margin-top:8px">' +
+    `<select id="rvsrc">${srcOpts}</select><select id="rvlev">${levOpts}</select>` +
+    'len <input id="rvmin" type="number" value="0" style="width:64px">–' +
+    '<input id="rvmax" type="number" value="20" style="width:64px">' +
+    'pool <input id="rvsize" type="number" value="40" style="width:64px">' +
+    'per show <input id="rvpshow" type="number" value="3" style="width:64px"></div>' +
+    '<label><input type="checkbox" id="rvbal" checked class="check"> length-balanced pool (fights the short-fragment monoculture)</label>' +
+    '<button class="primary" id="rvgo" style="margin-top:12px">Build pool</button>' +
+    '<span class="dim" id="rvpoolinfo" style="margin-left:10px"></span>';
+  $('#view').append(f);
+  $('#rvgo').onclick = async () => {
+    $('#rvpoolinfo').textContent = 'building…';
+    const target = $('#rvpt').value || $('#rvlabel').value.trim();
+    const r = await api('/api/pool', { method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ point: target, q: $('#rvq').value,
+        source: +$('#rvsrc').value, level: $('#rvlev').value,
+        min_len: +$('#rvmin').value, max_len: +$('#rvmax').value,
+        size: +$('#rvsize').value, per_show: +$('#rvpshow').value,
+        balanced: $('#rvbal').checked }) });
+    RV = { pool: r.pool, i: 0, point: target, done: [],
+           counts: { ok: 0, no: 0, skip: 0 } };
+    $('#rvpoolinfo').textContent = `${r.total_matching} matching → pool of ${r.pool.length}`;
+    const area = es('div'); area.id = 'rv-area'; area.style.marginTop = '18px';
+    area.innerHTML =
+      '<div id="rv-progress"></div>' +
+      '<div id="rv-card"></div>' +
+      '<div id="rv-meta"></div>' +
+      '<div id="rv-keys"><b>Space</b> replay · <b>A / →</b> approve → deck · <b>X</b> reject · <b>S / ←</b> skip · <b>Esc</b> back</div>';
+    $('#view').append(area);
+    rvShow();
+  };
+}
+
+function rvShow() {
+  if (RV.i >= RV.pool.length) { rvFinish(); return; }
+  const r = RV.pool[RV.i];
+  const prog = $('#rv-progress');
+  prog.innerHTML = RV.pool.map((_, i) => {
+    const st = RV.done[i];
+    return `<i class="${st === 'ok' ? 'ok' : st === 'no' ? 'no' : ''}"></i>`;
+  }).join('');
+  const img = r.media_image ? `<img src="/api/media/${r.id}/image?v=${r.id}" alt="">` : '';
+  const au = r.media_audio ? `<audio controls autoplay preload="none" src="/api/media/${r.id}/audio?v=${r.id}"></audio>` : '';
+  $('#rv-card').innerHTML = img + au +
+    `<div class="jp">${esc(r.text)}</div>` +
+    (r.reading ? `<div class="rd">${esc(r.reading)}</div>` : '') +
+    (r.translation ? `<div class="tr">${esc(r.translation)}</div>` : '');
+  $('#rv-meta').textContent =
+    `${RV.i + 1}/${RV.pool.length} · ${r.source_name}${r.episode ? ' · ep ' + r.episode : ''}` +
+    ` · ${r.char_len} chars · ${r.level || '—'} · ${RV.point || 'no label'}`;
+}
+
+async function rvDecide(kind) {
+  if (RV.i >= RV.pool.length) return;
+  const r = RV.pool[RV.i];
+  RV.done[RV.i] = kind === 'ok' ? 'ok' : kind === 'no' ? 'no' : '';
+  RV.counts[kind] = (RV.counts[kind] || 0) + 1;
+  if (kind === 'ok') {
+    await api('/api/decide', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ids: [r.id], decision: 'approved' }) });
+    await api('/api/deck/add', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sentence_id: r.id, point: RV.point || '' }) });
+  } else if (kind === 'no') {
+    await api('/api/decide', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ids: [r.id], decision: 'discarded' }) });
+  }
+  RV.i += 1;
+  rvShow();
+}
+
+function rvFinish() {
+  $('#rv-card').innerHTML =
+    `<div style="padding:30px 0"><b style="font-size:22px">Pool done</b><br>` +
+    `<span class="dim">approved ${RV.counts.ok} · rejected ${RV.counts.no} · skipped ${RV.counts.skip}</span></div>`;
+  $('#rv-meta').textContent = 'approved cards are in the Deck view, ordered under their point';
+  $('#rv-progress').innerHTML = '';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!document.getElementById('rv-card')) return;
+  if (document.activeElement.tagName === 'INPUT' ||
+      document.activeElement.tagName === 'TEXTAREA' ||
+      document.activeElement.tagName === 'SELECT') return;
+  if (window.getSelection && String(window.getSelection())) return;
+  const k = e.key.toLowerCase();
+  if (e.code === 'Space') {
+    const a = document.querySelector('#rv-card audio');
+    if (a) { a.currentTime = 0; a.play(); }
+    e.preventDefault();
+  } else if (k === 'a' || e.key === 'ArrowRight') { e.preventDefault(); rvDecide('ok'); }
+  else if (k === 'x') { rvDecide('no'); }
+  else if (k === 's' || e.key === 'ArrowLeft') { e.preventDefault(); rvDecide('skip'); }
+});
+
+/* ---------- deck workbench ---------- */
+async function showDeck() {
+  const d = await api('/api/deck');
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Deck</h2>'; $('#view').append(h);
+  if (!d.items.length) {
+    const p = es('p'); p.className = 'dim';
+    p.textContent = 'The deck is empty — approve cards in Batch review and they land here, grouped by grammar point.';
+    $('#view').append(p);
+    return;
+  }
+  const groups = {};
+  for (const it of d.items) (groups[it.point || '· no point ·'] =
+    groups[it.point || '· no point ·'] || []).push(it);
+  for (const [point, items] of Object.entries(groups)) {
+    const shows = {};
+    for (const it of items) shows[it.source_name] = (shows[it.source_name] || 0) + 1;
+    const g = es('div'); g.className = 'deckgroup';
+    g.innerHTML = `<h3>${esc(point)}<span class="balance">${items.length} cards · ` +
+      Object.entries(shows).map(([k, v]) => `${esc(k)}×${v}`).join(' · ') +
+      '</span></h3>';
+    $('#view').append(g);
+    items.forEach((it, idx) => {
+      const row = es('div'); row.className = 'drow';
+      row.innerHTML =
+        `<div style="flex:1;min-width:0"><div class="jp">${esc(it.text)}</div>` +
+        `<div class="meta">${esc(it.source_name)}${it.episode ? ' · ep ' + it.episode : ''} · ${it.char_len} chars</div></div>` +
+        `<input class="note" placeholder="note / explanation (on card back)" value="${esc(it.note || '')}">` +
+        `<button class="up">↑</button><button class="dn">↓</button>` +
+        `<button class="no rm">✕</button>`;
+      g.appendChild(row);
+      row.querySelector('.note').onchange = async (e) => {
+        await api(`/api/deck/${it.id}`, { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ note: e.target.value }) });
+      };
+      row.querySelector('.rm').onclick = async () => {
+        await api(`/api/deck/${it.id}`, { method: 'DELETE' });
+        showDeck();
+      };
+      row.querySelector('.up').onclick = () => deckMove(it, idx - 1, items);
+      row.querySelector('.dn').onclick = () => deckMove(it, idx + 1, items);
+    });
+  }
+}
+
+async function deckMove(it, to, items) {
+  if (to < 0 || to >= items.length) return;
+  const other = items[to];
+  await api(`/api/deck/${it.id}`, { method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ position: other.position }) });
+  await api(`/api/deck/${other.id}`, { method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ position: it.position }) });
+  showDeck();
+}
+
+const VIEWS = { stats: showStats, browse: showBrowse, points: showPoints,
+                review: showReview, deck: showDeck,
                 sources: showSources, lexicons: showLexicons, export: showExport };
 for (const a of document.querySelectorAll('#side a[data-view]')) {
   a.onclick = () => {

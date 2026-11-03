@@ -60,6 +60,22 @@ create index if not exists lw_word on lexicon_words(word);
 create table if not exists settings(
   key text primary key, value text
 );
+create table if not exists grammar_points(
+  id text primary key,           -- GP-001 or any slug
+  title text,
+  pattern text,
+  level text,
+  module text,                   -- lesson/topic grouping
+  hints text                     -- csv of match hints (optional)
+);
+create table if not exists deck_items(
+  id integer primary key,
+  sentence_id integer not null references sentences(id),
+  point text,                    -- grammar point id (or free label)
+  position integer,
+  note text                      -- per-card explanation shown on export
+);
+create index if not exists deck_point on deck_items(point, position);
 """
 
 
@@ -77,6 +93,82 @@ class Store:
 
     def close(self):
         self.db.close()
+
+    def reopen(self, path: str | Path):
+        """Switch this Store to another database file (.aproj open)."""
+        self.db.close()
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(self.path, check_same_thread=False)
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript(SCHEMA)
+        self.db.commit()
+
+    def snapshot_to(self, dest: str | Path):
+        """Consistent copy of the live database (.aproj save)."""
+        self.db.execute("vacuum into ?", (str(dest),))
+
+    # -- grammar points ----------------------------------------------------
+
+    def add_points(self, rows: list[dict]) -> int:
+        """insert-or-replace grammar points; returns count"""
+        self.db.executemany(
+            "insert or replace into grammar_points(id,title,pattern,level,module,hints)"
+            " values (:id,:title,:pattern,:level,:module,:hints)", rows)
+        self.db.commit()
+        return len(rows)
+
+    def points(self) -> list:
+        return self.db.execute(
+            "select * from grammar_points order by id").fetchall()
+
+    def delete_point(self, pid: str):
+        self.db.execute("delete from grammar_points where id=?", (pid,))
+        self.db.commit()
+
+    # -- deck --------------------------------------------------------------
+
+    def deck_items(self) -> list:
+        return self.db.execute(
+            "select d.id, d.point, d.position, d.note, n.text, n.translation,"
+            " n.reading, n.source_id, s.name source_name, n.episode, n.level,"
+            " n.media_audio, n.media_image, n.char_len"
+            " from deck_items d join sentences n on n.id=d.sentence_id"
+            " join sources s on s.id=n.source_id"
+            " order by d.point, d.position, d.id").fetchall()
+
+    def deck_add(self, sentence_id: int, point: str, note: str = "",
+                 position: int | None = None) -> int:
+        if position is None:
+            r = self.db.execute(
+                "select coalesce(max(position), -1) + 1 p from deck_items"
+                " where point = ? or ? = ''", (point, point)).fetchone()
+            position = r["p"]
+        cur = self.db.execute(
+            "insert into deck_items(sentence_id, point, position, note)"
+            " values (?,?,?,?)", (sentence_id, point, position, note))
+        self.db.commit()
+        return cur.lastrowid
+
+    def deck_update(self, item_id: int, position: int | None = None,
+                    note: str | None = None, point: str | None = None):
+        sets, args = [], []
+        if position is not None:
+            sets.append("position=?"); args.append(position)
+        if note is not None:
+            sets.append("note=?"); args.append(note)
+        if point is not None:
+            sets.append("point=?"); args.append(point)
+        if not sets:
+            return
+        args.append(item_id)
+        self.db.execute(f"update deck_items set {', '.join(sets)} where id=?",
+                        args)
+        self.db.commit()
+
+    def deck_remove(self, item_id: int):
+        self.db.execute("delete from deck_items where id=?", (item_id,))
+        self.db.commit()
 
     # -- settings ---------------------------------------------------------
 

@@ -29,7 +29,7 @@ CSS = """.card { font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
 img { max-width: 480px; border-radius: 8px; }
 """
 
-FIELDS = ["Sentence", "Reading", "Translation", "Image", "Audio", "Source"]
+FIELDS = ["Sentence", "Reading", "Translation", "Image", "Audio", "Source", "Note"]
 
 IMMERSION = genanki.Model(
     MODEL_ID, "AnkiStudio Immersion",
@@ -41,6 +41,8 @@ IMMERSION = genanki.Model(
                  '<div class="jp">{{Sentence}}</div>'
                  '<div class="rd">{{Reading}}</div>'
                  '<div class="tr">{{Translation}}</div>'
+                 '{{#Note}}<div class="note" style="font-size:14px;color:#6b7280;'
+                 'margin-top:12px">{{Note}}</div>{{/Note}}'
                  '<div class="src">{{Source}}</div>'),
     }],
     css=CSS)
@@ -54,7 +56,10 @@ READING = genanki.Model(
         "afmt": ('{{FrontSide}}<hr id="answer">'
                  '<div class="rd">{{Reading}}</div>'
                  '<div class="tr">{{Translation}}</div>'
-                 '{{Audio}}<div class="src">{{Source}}</div>'),
+                 '{{Audio}}'
+                 '{{#Note}}<div style="font-size:14px;color:#6b7280;'
+                 'margin-top:12px">{{Note}}</div>{{/Note}}'
+                 '<div class="src">{{Source}}</div>'),
     }],
     css=CSS)
 
@@ -72,6 +77,16 @@ def build_deck(store, name: str, preset: str = "immersion",
                pad_start: float | None = None,
                pad_end: float | None = None) -> dict:
     where, args = ["n.keep=1"], []
+    if status == "deck":
+        import json as _json
+        rows = [dict(r) for r in store.db.execute(
+            "select n.*, s.name source_name, s.path source_path,"
+            " s.kind source_kind, s.meta source_meta, d.note deck_note"
+            " from deck_items d join sentences n on n.id=d.sentence_id"
+            " join sources s on s.id=n.source_id"
+            " order by d.point, d.position, d.id")]
+        return _package(store, rows, name, preset, out_dir,
+                        pad_start, pad_end)
     if status == "approved":
         where.append("n.decision='approved'")
     elif status == "pending":
@@ -90,7 +105,12 @@ def build_deck(store, name: str, preset: str = "immersion",
         f" order by n.id", args).fetchall()
     if not rows:
         return {"error": "no sentences matched the filters"}
+    return _package(store, [dict(r) for r in rows], name, preset, out_dir,
+                    pad_start, pad_end)
 
+
+def _package(store, rows, name, preset, out_dir, pad_start, pad_end) -> dict:
+    import json as _json
     model = PRESETS[preset]
     deck = genanki.Deck(DECK_ID + (0 if preset == "immersion" else 1),
                         name or "AnkiStudio export")
@@ -130,7 +150,7 @@ def build_deck(store, name: str, preset: str = "immersion",
                 guid=genanki.guid_for("as", r["id"]),
                 model=model,
                 fields=[r["text"] or "", r["reading"] or "", r["translation"] or "",
-                        img_html, audio_html, src]))
+                        img_html, audio_html, src, r.get("deck_note") or ""]))
             continue
         try:
             if r["media_image"] and r["source_path"]:
@@ -163,8 +183,7 @@ def build_deck(store, name: str, preset: str = "immersion",
             guid=genanki.guid_for("as", r["id"]),
             model=model,
             fields=[r["text"] or "", r["reading"] or "", r["translation"] or "",
-                    img_html, audio_html, src],
-        ))
+                    img_html, audio_html, src, r.get("deck_note") or ""]))
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^\w\-]+", "_", name or "ankistudio").strip("_") or "ankistudio"
