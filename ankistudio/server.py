@@ -66,6 +66,8 @@ class PoolReq(BaseModel):
     per_show: int = 3            # max candidates per source
     balanced: bool = True        # force length spread within each source
     exclude_deck: bool = True    # skip sentences already in the deck
+    match_mode: str = "contains" # contains | starts | ends | regex
+    exclude: str = ""            # exclude sentences containing this
 
 
 class DeckAddReq(BaseModel):
@@ -210,6 +212,13 @@ def create_app(db_path: str | Path) -> FastAPI:
             f"select n.*, s.name source_name from sentences n"
             f" join sources s on s.id=n.source_id where {' and '.join(where)}",
             args)]
+        if req.q and req.match_mode == "regex":
+            import re as _re
+            try:
+                rx = _re.compile(req.q)
+            except _re.error:
+                raise HTTPException(400, f"bad regex: {req.q}")
+            rows = [r for r in rows if rx.search(r["text"] or "")]
         if level:
             # exact: level is precomputed by POST /api/classify
             rows = [r for r in rows if r["level"] == level]
@@ -615,13 +624,27 @@ def create_app(db_path: str | Path) -> FastAPI:
         if req.level:
             where.append("n.level=?"); args.append(req.level)
         if req.q:
-            where.append("n.text like ?"); args.append(f"%{req.q}%")
+            if req.match_mode == "starts":
+                where.append("n.text like ?"); args.append(f"{req.q}%")
+            elif req.match_mode == "ends":
+                where.append("n.text like ?"); args.append(f"%{req.q}")
+            elif req.match_mode != "regex":
+                where.append("n.text like ?"); args.append(f"%{req.q}%")
+        if req.exclude:
+            where.append("n.text not like ?"); args.append(f"%{req.exclude}%")
         where.append("n.char_len between ? and ?")
         args += [req.min_len, req.max_len]
         rows = [dict(r) for r in store.db.execute(
             f"select n.*, s.name source_name from sentences n"
             f" join sources s on s.id=n.source_id where {' and '.join(where)}",
             args)]
+        if req.q and req.match_mode == "regex":
+            import re as _re
+            try:
+                rx = _re.compile(req.q)
+            except _re.error:
+                raise HTTPException(400, f"bad regex: {req.q}")
+            rows = [r for r in rows if rx.search(r["text"] or "")]
         context = f"point:{req.point}" if req.point else "global"
         excluded = store.excluded_for(context)
         rows = [r for r in rows if r["id"] not in excluded]

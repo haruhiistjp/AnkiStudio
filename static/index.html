@@ -1027,7 +1027,16 @@ async function showReview(prePoint) {
     `<select id="rvpt" style="width:100%">${ptOpts}</select>` +
     '<label>label (used when the point is free)</label>' +
     '<input id="rvlabel" placeholder="e.g. L1 · core sentence">' +
-    '<label>text must contain</label><input id="rvq" placeholder="が">' +
+    '<label>text search</label>' +
+    '<div class="row" style="margin:0">' +
+    '<input id="rvq" placeholder="が" style="flex:1">' +
+    '<select id="rvmode" title="match mode">' +
+    '<option value="contains">contains</option>' +
+    '<option value="starts">starts with</option>' +
+    '<option value="ends">ends with</option>' +
+    '<option value="regex">regex</option></select></div>' +
+    '<label>exclude sentences containing</label>' +
+    '<input id="rvexcl_q" placeholder="(optional) e.g. を, ます">' +
     '<div class="row" style="margin-top:8px">' +
     `<select id="rvsrc">${srcOpts}</select><select id="rvlev">${levOpts}</select>` +
     'len <input id="rvmin" type="number" value="0" style="width:64px">–' +
@@ -1046,6 +1055,7 @@ async function showReview(prePoint) {
     const r = await api('/api/pool', { method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ point: target, q: $('#rvq').value,
+        match_mode: $('#rvmode').value, exclude: $('#rvexcl_q').value,
         source: +$('#rvsrc').value, level: $('#rvlev').value,
         min_len: +$('#rvmin').value, max_len: +$('#rvmax').value,
         size: +$('#rvsize').value, per_show: +$('#rvpshow').value,
@@ -1059,14 +1069,19 @@ async function showReview(prePoint) {
       '<div id="rv-progress"></div>' +
       '<div id="rv-card"></div>' +
       '<div id="rv-meta"></div>' +
-      '<div id="rv-keys"><b>Space</b> replay · <b>A / →</b> approve → deck · <b>X</b> reject · <b>S / ←</b> skip · <b>Esc</b> back</div>';
+      '<div class="row" style="justify-content:center;margin-top:10px">' +
+      '<button id="rv-undo" style="display:none">← Undo last</button></div>' +
+      '<div id="rv-keys"><b>Space</b> replay · <b>A/→</b> approve · <b>X</b> reject · <b>S/←</b> skip · <b>Z</b> undo · <b>Esc</b> back</div>';
     $('#view').append(area);
+    $('#rv-undo').onclick = rvUndo;
     rvShow();
   };
 }
 
 function rvShow() {
   if (RV.i >= RV.pool.length) { rvFinish(); return; }
+  const undoBtn = $('#rv-undo');
+  if (undoBtn) undoBtn.style.display = RV.i > 0 ? '' : 'none';
   const r = RV.pool[RV.i];
   const prog = $('#rv-progress');
   prog.innerHTML = RV.pool.map((_, i) => {
@@ -1103,6 +1118,39 @@ async function rvDecide(kind) {
   rvShow();
 }
 
+async function rvUndo() {
+  if (RV.i === 0) return;
+  RV.i--;
+  const r = RV.pool[RV.i];
+  const prev = RV.done[RV.i];
+  const ctx = RV.point ? 'point:' + RV.point : 'global';
+  // clear the pool decision
+  await api('/api/pool-decide', { method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: '' }) });
+  // if it was approved, also remove from the deck
+  if (prev === 'ok') {
+    const deck = await api('/api/deck');
+    const item = deck.items.find(it =>
+      it.sentence_id === r.id || it.id === r.id);
+    if (item) {
+      // find by matching text + point (deck items store their own id)
+      const match = deck.items.find(it =>
+        it.text === r.text && it.point === (RV.point || ''));
+      if (match) {
+        await api('/api/deck/' + match.id, { method: 'DELETE' });
+      }
+    }
+    RV.counts.ok = Math.max(0, RV.counts.ok - 1);
+  } else if (prev === 'no') {
+    RV.counts.no = Math.max(0, RV.counts.no - 1);
+  } else {
+    RV.counts.skip = Math.max(0, RV.counts.skip - 1);
+  }
+  RV.done[RV.i] = undefined;
+  rvShow();
+}
+
 function rvFinish() {
   $('#rv-card').innerHTML =
     `<div style="padding:30px 0"><b style="font-size:22px">Pool done</b><br>` +
@@ -1125,6 +1173,7 @@ document.addEventListener('keydown', (e) => {
   } else if (k === 'a' || e.key === 'ArrowRight') { e.preventDefault(); rvDecide('ok'); }
   else if (k === 'x') { rvDecide('no'); }
   else if (k === 's' || e.key === 'ArrowLeft') { e.preventDefault(); rvDecide('skip'); }
+  else if (k === 'z') { rvUndo(); }
 });
 
 /* ---------- deck workbench ---------- */
