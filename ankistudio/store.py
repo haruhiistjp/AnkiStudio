@@ -141,9 +141,9 @@ class Store:
 
     def deck_items(self) -> list:
         return self.db.execute(
-            "select d.id, d.point, d.position, d.note, n.text, n.translation,"
-            " n.reading, n.source_id, s.name source_name, n.episode, n.level,"
-            " n.media_audio, n.media_image, n.char_len"
+            "select d.id, d.sentence_id, d.point, d.position, d.note,"
+            " n.text, n.translation, n.reading, n.source_id, s.name source_name,"
+            " n.episode, n.level, n.media_audio, n.media_image, n.char_len"
             " from deck_items d join sentences n on n.id=d.sentence_id"
             " join sources s on s.id=n.source_id"
             " order by d.point, d.position, d.id").fetchall()

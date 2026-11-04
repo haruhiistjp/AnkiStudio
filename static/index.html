@@ -329,8 +329,20 @@ async function loadPage(p) {
   const pages = Math.max(1, Math.ceil(d.total / d.per));
   $('#bpager').innerHTML =
     `<span class="dim">${d.total.toLocaleString()} sentences · page ${p}/${pages}</span>` +
+    (pages > 1
+      ? `<input id="pgoto" type="number" min="1" max="${pages}" value="${p}"` +
+        ` style="width:72px" title="page number"> <button id="pgobtn">Go</button>`
+      : '') +
     (p > 1 ? `<button id="pprev">← prev</button>` : '') +
     (p < pages ? `<button id="pnext">next →</button>` : '');
+  const go = (v) => {
+    const n = Math.max(1, Math.min(pages, parseInt(v, 10) || 1));
+    if (n !== p) loadPage(n);
+  };
+  if ($('#pgobtn')) {
+    $('#pgobtn').onclick = () => go($('#pgoto').value);
+    $('#pgoto').onkeydown = (e) => { if (e.key === 'Enter') go($('#pgoto').value); };
+  }
   if ($('#pprev')) $('#pprev').onclick = () => loadPage(p - 1);
   if ($('#pnext')) $('#pnext').onclick = () => loadPage(p + 1);
 }
@@ -1148,15 +1160,9 @@ async function rvUndo() {
   // if it was approved, also remove from the deck
   if (prev === 'ok') {
     const deck = await api('/api/deck');
-    const item = deck.items.find(it =>
-      it.sentence_id === r.id || it.id === r.id);
-    if (item) {
-      // find by matching text + point (deck items store their own id)
-      const match = deck.items.find(it =>
-        it.text === r.text && it.point === (RV.point || ''));
-      if (match) {
-        await api('/api/deck/' + match.id, { method: 'DELETE' });
-      }
+    const match = deck.items.find(it => it.sentence_id === r.id);
+    if (match) {
+      await api('/api/deck/' + match.id, { method: 'DELETE' });
     }
     RV.counts.ok = Math.max(0, RV.counts.ok - 1);
   } else if (prev === 'no') {

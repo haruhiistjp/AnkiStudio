@@ -708,6 +708,14 @@ def create_app(db_path: str | Path) -> FastAPI:
             if fresh or not rows:
                 cands = fresh
         out = drain(pick_queues(cands))
+        if len(out) < req.size:
+            # per-show caps exist for diversity, not starvation: when few
+            # sources match, top the pool up with the best remaining
+            # candidates instead of returning a near-empty pool
+            chosen = {r["id"] for r in out}
+            rest = sorted((r for r in cands if r["id"] not in chosen),
+                          key=lambda r: r["char_len"] or 0)
+            out.extend(rest[:req.size - len(out)])
         _r.Random(42).shuffle(out)
         if not out and rows:
             # everything sampled is already in the deck — show those cards
@@ -849,6 +857,21 @@ def create_app(db_path: str | Path) -> FastAPI:
         p = Path(name)
         if not p.is_absolute():
             p = Path.cwd() / p
+        # only hand out files the app itself produces, under the project
+        # dir or the temp dirs — never an arbitrary path on disk
+        import tempfile as _tempfile
+        bases = [Path.cwd(), Path("/tmp"), Path(_tempfile.gettempdir())]
+        allowed = False
+        for base in bases:
+            try:
+                p.resolve().relative_to(base.resolve())
+                allowed = True
+                break
+            except ValueError:
+                continue
+        if not allowed:
+            raise HTTPException(403, "refusing to serve files outside the "
+                                     "project and temp directories")
         if not p.exists():
             raise HTTPException(404, "no such export")
         return FileResponse(p, filename=p.name)
