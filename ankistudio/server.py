@@ -918,6 +918,9 @@ def create_app(db_path: str | Path) -> FastAPI:
                     ro.close()
                 except Exception:
                     pass
+                hist_dir = d / "history"
+                if hist_dir.is_dir():
+                    meta["history"] = len(list(hist_dir.glob("*.aproj")))
                 entries.append(meta)
         for f in sorted(projs_dir.glob("*.aproj")) if projs_dir.is_dir() else []:
             try:
@@ -943,14 +946,32 @@ def create_app(db_path: str | Path) -> FastAPI:
 
     # autosave: while a project db is open, keep its .aproj snapshot in
     # data/projects/ fresh (~20s after changes) so a crash or a stray
-    # reopen can never lose more than seconds of review work
+    # reopen can never lose more than seconds of review work. Once an
+    # hour (when work happened) the previous snapshot is moved into the
+    # project's history/ folder first — manual saves and old states stay
+    # recoverable instead of being overwritten forever.
     import threading
     import time as _time
+
+    def _rotate_history(fresh: Path, keep: int = 24):
+        """Move the current snapshot into history/<timestamp>.aproj and
+        prune to the newest `keep` versions."""
+        hist = fresh.parent / fresh.stem / "history"
+        hist.mkdir(parents=True, exist_ok=True)
+        stamp = _time.strftime("%Y%m%d-%H%M%S")
+        fresh.replace(hist / f"{stamp}{fresh.suffix}")
+        versions = sorted(hist.glob(f"*{fresh.suffix}"))
+        for old in versions[:-keep]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
 
     def _autosave_loop():
         import sys
         import traceback
         last_changes = None
+        last_rotation = 0.0
         while True:
             _time.sleep(20)
             try:
@@ -958,11 +979,13 @@ def create_app(db_path: str | Path) -> FastAPI:
                 # grandparent, not the direct parent
                 if store.path.parent.parent == data_dir / "projects":
                     ch = store.db.total_changes
+                    fresh = data_dir / "projects" / f"{store.path.parent.name}.aproj"
                     if ch != last_changes:
                         last_changes = ch
-                        _write_aproj(data_dir / "projects" /
-                                     f"{store.path.parent.name}.aproj",
-                                     store.path.parent.name)
+                        if fresh.exists() and _time.time() - last_rotation >= 3600:
+                            _rotate_history(fresh)
+                            last_rotation = _time.time()
+                        _write_aproj(fresh, store.path.parent.name)
             except Exception:
                 # never kill the loop — but leave a trace in the server log
                 traceback.print_exc(file=sys.stderr)

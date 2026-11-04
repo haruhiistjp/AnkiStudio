@@ -969,8 +969,7 @@ async function showProjects() {
     '<div class="info"><div class="name">Current: ' + esc(d.current.name) + '</div>' +
     '<div class="meta">' + d.current.sources + ' sources / ' + d.current.points +
     ' points · ' + esc(d.current.db) +
-    (d.current.is_default ? '' : ' · autosaves to data/projects/' +
-      esc(d.current.name) + '.aproj every ~20s') + '</div></div>' +
+    (d.current.is_default ? '' : ' · autosaves every ~20s · hourly history versions kept (last 24)') + '</div></div>' +
     '<button id="prj-saveas">Save a copy as…</button>' +
     (d.current.is_default ? '' : '<button class="primary" id="prj-close">Close project</button>');
   $('#view').append(cur);
@@ -1014,7 +1013,8 @@ async function showProjects() {
     const label = proj.kind === 'working'
       ? `${proj.sentences != null ? proj.sentences.toLocaleString() + ' sentences · ' : ''}` +
         `${proj.deck != null ? proj.deck + ' deck cards · ' : ''}` +
-        `working copy · saved ${when(proj.mtime)}`
+        `working copy · saved ${when(proj.mtime)}` +
+        (proj.history ? ` · ${proj.history} history versions` : '')
       : `snapshot · ${when(proj.mtime)}` +
         (proj.sentences != null ? ` · ${proj.sentences.toLocaleString()} sentences` : '');
     row.innerHTML = '<div class="info"><div class="name">' + esc(proj.name) +
