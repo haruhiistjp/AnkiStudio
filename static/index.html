@@ -82,6 +82,8 @@ form.box input { width:100%; }
 .cardbox .jp { font-size:26px; line-height:1.8; }
 .cardbox .rd { color:var(--muted); font-size:15px; margin-top:8px; }
 .cardbox .tr { font-size:16px; margin-top:14px; color:var(--ink); }
+.cardbox .ex { font-size:14px; margin-top:14px; color:#6b7280;
+  border-top:1px solid var(--line); padding-top:10px; white-space:pre-wrap; }
 .cardbox img { max-width:420px; max-height:200px; border-radius:8px; margin-bottom:12px; }
 .cardbox audio { display:block; margin:12px auto 0; width:100%; max-width:420px; }
 .cardbox .front-label { font-size:10.5px; letter-spacing:.08em; color:var(--muted);
@@ -190,6 +192,15 @@ form.box input { width:100%; }
     <span class="meta">click card or press Space to flip</span>
   </div>
   <div class="cardbox" id="pv-card"></div>
+  <div id="pv-edit" style="display:none;max-width:640px;margin:10px auto 0">
+    <textarea id="pv-note" rows="4" style="width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:13px;padding:8px" placeholder="explanation — appears on the card back when exported"></textarea>
+    <div class="row" style="justify-content:center;margin-top:8px">
+      <button class="primary" id="pv-save-note">Save explanation</button>
+      <button id="pv-ai-note" title="write the explanation with the configured AI API">✦ AI</button>
+      <button id="pv-tpl-note" title="start from the block's template">Template</button>
+      <span class="meta" id="pv-note-msg"></span>
+    </div>
+  </div>
   <div class="note">editor info only — not part of the card</div>
 </div>
 <script>
@@ -755,21 +766,31 @@ $('#themeSel').onchange = () => applyTheme($('#themeSel').value);
 applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
 
 /* ---------- Anki-style card preview ---------- */
-let PV = { row: null, back: false };
-function openPreview(row) {
-  PV = { row, back: false };
+let PV = { row: null, back: false, edit: null };   // edit: {item_id, point, template}
+function openPreview(row, edit = null) {
+  PV = { row, back: false, edit };
   $('#preview').classList.add('open');
+  const ed = document.getElementById('pv-edit');
+  ed.style.display = edit ? '' : 'none';
+  if (edit) {
+    document.getElementById('pv-note').value = row.note || '';
+    document.getElementById('pv-note-msg').textContent = '';
+    document.getElementById('pv-tpl-note').style.display =
+      (edit.template || '').includes('{') ? '' : 'none';
+  }
   renderPreview();
 }
 function closePreview() {
   $('#preview').classList.remove('open');
-  PV = { row: null, back: false };
+  PV = { row: null, back: false, edit: null };
+  document.getElementById('pv-edit').style.display = 'none';
 }
 function renderPreview() {
   const r = PV.row;
   if (!r) return;
   $('#pv-meta').textContent =
     `${r.source_name}${r.episode ? ' · ep ' + r.episode : ''} · ${r.char_len} chars` +
+    (PV.edit ? ` · ${PV.edit.point || 'no block'}` : '') +
     (r.drop_code ? ` · ⚠ dropped (${r.drop_code})` : '') +
     (r.decision === 'approved' ? ' · ✓ approved' :
      r.decision === 'discarded' ? ' · ✕ discarded' : '');
@@ -780,13 +801,55 @@ function renderPreview() {
     ? `<audio controls preload="none" src="/api/media/${r.id}/audio?v=${r.id}"></audio>` : '';
   const back = PV.back
     ? `${r.reading ? `<div class="rd">${esc(r.reading)}</div>` : ''}` +
-      `${r.translation ? `<div class="tr">${esc(r.translation)}</div>` : ''}` : '';
+      `${r.translation ? `<div class="tr">${esc(r.translation)}</div>` : ''}` +
+      `${r.note ? `<div class="ex">${esc(r.note)}</div>` : ''}` : '';
   $('#pv-card').innerHTML =
     `<div class="front-label">${PV.back ? 'Back' : 'Front'}</div>` +
     img + au +
     `<div class="jp">${esc(r.text)}</div>` + back;
 }
 $('#pv-close').onclick = closePreview;
+// explanation editor (deck redactor): the note IS the card's back text
+document.getElementById('pv-save-note').onclick = async () => {
+  if (!PV.edit) return;
+  const note = document.getElementById('pv-note').value;
+  try {
+    await api(`/api/deck/${PV.edit.item_id}`, { method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ note }) });
+    PV.row.note = note;
+    document.getElementById('pv-note-msg').textContent = 'saved ✓';
+    renderPreview();
+  } catch (e) {
+    document.getElementById('pv-note-msg').textContent = 'error: ' + e.message;
+  }
+};
+document.getElementById('pv-ai-note').onclick = async (ev) => {
+  if (!PV.edit) return;
+  const btn = ev.target.closest('button');
+  btn.disabled = true;
+  document.getElementById('pv-note-msg').textContent = 'asking the API…';
+  try {
+    const r = await api('/api/ai/fill', { method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ item_id: PV.edit.item_id }) });
+    document.getElementById('pv-note').value = r.note;
+    document.getElementById('pv-save-note').click();
+  } catch (e) {
+    document.getElementById('pv-note-msg').textContent = 'error: ' + e.message;
+  }
+  btn.disabled = false;
+};
+document.getElementById('pv-tpl-note').onclick = () => {
+  if (!PV.edit || !PV.edit.template) return;
+  const r = PV.row;
+  const fields = { sentence: r.text, reading: r.reading, translation: r.translation,
+                   source: r.source_name, episode: r.episode, title: '',
+                   pattern: '', level: '' };
+  Object.assign(fields, PV.edit.pointInfo || {});
+  document.getElementById('pv-note').value =
+    PV.edit.template.replace(/\{(\w+)\}/g, (m, k) => fields[k] != null ? fields[k] : m);
+};
 $('#pv-save').onclick = () => {
   if (!PV.row || !PV.row.media_audio) return;
   const fmt = $('#pv-fmt').value;
@@ -805,6 +868,8 @@ $('#pv-card').onclick = () => {
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && $('#preview').classList.contains('open')
       && document.activeElement.tagName !== 'INPUT'
+      && document.activeElement.tagName !== 'TEXTAREA'
+      && document.activeElement.tagName !== 'SELECT'
       && !(window.getSelection && String(window.getSelection()))) {
     e.preventDefault();
     PV.back = !PV.back; renderPreview();
@@ -1457,36 +1522,26 @@ async function showDeck() {
       btn.disabled = false;
     };
     items.forEach((it, idx) => {
-      const row = es('div'); row.className = 'drow';
+      const row = es('div'); row.className = 'drow'; row.style.cursor = 'pointer';
       row.innerHTML =
         `<div style="flex:1;min-width:0"><div class="jp">${esc(it.text)}</div>` +
-        `<div class="meta">${esc(it.source_name)}${it.episode ? ' · ep ' + it.episode : ''} · ${it.char_len} chars</div></div>` +
-        `<input class="note" placeholder="note / explanation (on card back)" value="${esc(it.note || '')}">` +
-        '<button class="ai1" title="explain this card via the AI API">✦</button>' +
+        `<div class="meta">${esc(it.source_name)}${it.episode ? ' · ep ' + it.episode : ''} · ${it.char_len} chars` +
+        `${it.note ? ' · ✎ explained' : ''}</div></div>` +
+        '<button class="edit" title="open the card editor">✎ Edit</button>' +
         `<button class="up">↑</button><button class="dn">↓</button>` +
         `<button class="mv" title="move to another point">⇄</button>` +
         `<button class="no rm">✕</button>`;
       g.appendChild(row);
-      row.querySelector('.note').onchange = async (e) => {
-        await api(`/api/deck/${it.id}`, { method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ note: e.target.value }) });
+      const openCard = () => openPreview(
+        { ...it, id: it.sentence_id },     // sentence id → media endpoints
+        { item_id: it.id, point, template: pt.template || '',
+          pointInfo: { title: pt.title || '', pattern: pt.pattern || '',
+                       level: pt.level || '' } });
+      row.onclick = (ev) => {
+        if (ev.target.closest('button, input, textarea')) return;
+        openCard();
       };
-      row.querySelector('.ai1').onclick = async (ev) => {
-        const btn = ev.target.closest('button');
-        btn.disabled = true;
-        const noteEl = row.querySelector('.note');
-        noteEl.placeholder = 'asking the API…';
-        try {
-          const r = await api('/api/ai/fill', { method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ item_id: it.id,
-              instruction: g.querySelector('.instr').value }) });
-          noteEl.value = r.note;
-          noteEl.dispatchEvent(new Event('change'));
-        } catch (e) { noteEl.placeholder = 'error: ' + e.message; }
-        btn.disabled = false;
-      };
+      row.querySelector('.edit').onclick = openCard;
       row.querySelector('.mv').onclick = () => {
         ptOpen(async (newPoint) => {
           await api(`/api/deck/${it.id}`, { method: 'POST',
