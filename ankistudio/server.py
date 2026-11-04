@@ -79,6 +79,7 @@ class DeckAddReq(BaseModel):
 
 class PointUpdateReq(BaseModel):
     template: str | None = None
+    boilerplate: str | None = None
     title: str | None = None
 
 
@@ -893,14 +894,39 @@ def create_app(db_path: str | Path) -> FastAPI:
                              (pid,)).fetchone()
         if not r:
             raise HTTPException(404, "no such point")
-        if req.template is not None:
-            store.db.execute("update grammar_points set template=? where id=?",
-                             (req.template, pid))
-        if req.title is not None:
-            store.db.execute("update grammar_points set title=? where id=?",
-                             (req.title, pid))
+        for col in ("template", "boilerplate", "title"):
+            val = getattr(req, col)
+            if val is not None:
+                store.db.execute(
+                    f"update grammar_points set {col}=? where id=?", (val, pid))
         store.db.commit()
         return {"ok": True}
+
+    @app.post("/api/boilerplate-apply")
+    def boilerplate_apply(req: TemplateApplyReq):
+        """Prepend the point's boilerplate to every card of the block that
+        doesn't already have it (idempotent — re-applying changes nothing).
+        Per-card notes survive below the boilerplate."""
+        r = store.db.execute(
+            "select boilerplate from grammar_points where id=?",
+            (req.point,)).fetchone()
+        bp = (r["boilerplate"] or "").strip() if r else ""
+        if not r or not bp:
+            raise HTTPException(400, "this point has no boilerplate yet")
+        items = store.db.execute(
+            "select d.id, d.note from deck_items d"
+            " join sentences n on n.id=d.sentence_id"
+            " where d.point=? order by d.position, d.id",
+            (req.point,)).fetchall()
+        updated = 0
+        for it in items:
+            note = (it["note"] or "").strip()
+            if bp in note:
+                continue
+            new_note = bp + ("\n\n" + note if note else "")
+            store.deck_update(it["id"], note=new_note)
+            updated += 1
+        return {"updated": updated, "total": len(items)}
 
     @app.post("/api/template-apply")
     def deck_template_apply(req: TemplateApplyReq):

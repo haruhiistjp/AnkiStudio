@@ -841,14 +841,17 @@ document.getElementById('pv-ai-note').onclick = async (ev) => {
   btn.disabled = false;
 };
 document.getElementById('pv-tpl-note').onclick = () => {
-  if (!PV.edit || !PV.edit.template) return;
+  if (!PV.edit) return;
   const r = PV.row;
   const fields = { sentence: r.text, reading: r.reading, translation: r.translation,
                    source: r.source_name, episode: r.episode, title: '',
                    pattern: '', level: '' };
   Object.assign(fields, PV.edit.pointInfo || {});
+  const rendered = (PV.edit.template || '')
+    .replace(/\{(\w+)\}/g, (m, k) => fields[k] != null ? fields[k] : m);
+  const bp = (PV.edit.boilerplate || '').trim();
   document.getElementById('pv-note').value =
-    PV.edit.template.replace(/\{(\w+)\}/g, (m, k) => fields[k] != null ? fields[k] : m);
+    bp ? bp + '\n\n' + rendered : rendered;
 };
 $('#pv-save').onclick = () => {
   if (!PV.row || !PV.row.media_audio) return;
@@ -1479,14 +1482,23 @@ async function showDeck() {
       '<button class="ai-block" title="explain every card without a note in one API call">✦ AI: fill empty notes</button>' +
       '<span class="bmsg dim"></span></div>' +
       '<div class="tpl-box" style="display:none">' +
+      '<label style="font-size:12px;color:var(--muted)">per-card template — placeholders: {sentence} {reading} {translation} {title} {pattern} {level} {source} {episode}</label>' +
       '<textarea class="tpl" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px" ' +
-      'placeholder="explanation template — placeholders: {sentence} {reading} {translation} {title} {pattern} {level} {source} {episode}"></textarea>' +
+      'placeholder="e.g. {pattern} — how it works in this sentence…"></textarea>' +
       '<div class="row" style="margin-top:6px"><button class="tpl-save primary">Save template</button>' +
-      '<span class="hint">applies to cards with an EMPTY note only</span></div></div>';
+      '<span class="hint">apply it with the “Apply template to empty” button above</span></div>' +
+      '<label style="font-size:12px;color:var(--muted);margin-top:12px">block boilerplate — same text on every card of this block, prepended before per-card notes</label>' +
+      '<textarea class="bp" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px" ' +
+      'placeholder="e.g. What ている is, in general — identical on every card of this block."></textarea>' +
+      '<div class="row" style="margin-top:6px"><button class="bp-save primary">Save boilerplate</button>' +
+      '<button class="bp-apply">Add boilerplate to all cards</button>' +
+      '<span class="hint">idempotent — cards that already have it are skipped</span></div></div>';
     $('#view').append(g);
     const tplBox = g.querySelector('.tpl-box'),
           tpl = g.querySelector('.tpl'), bmsg = g.querySelector('.bmsg');
+    const bp = g.querySelector('.bp');
     tpl.value = pt.template || '';
+    bp.value = pt.boilerplate || '';
     g.querySelector('.tpl-toggle').onclick = () => {
       tplBox.style.display = tplBox.style.display === 'none' ? '' : 'none';
     };
@@ -1495,6 +1507,24 @@ async function showDeck() {
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ template: tpl.value }) });
       bmsg.textContent = 'template saved ✓';
+    };
+    g.querySelector('.bp-save').onclick = async () => {
+      await api('/api/point/' + encodeURIComponent(point), { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ boilerplate: bp.value }) });
+      bmsg.textContent = 'boilerplate saved ✓';
+    };
+    g.querySelector('.bp-apply').onclick = async () => {
+      bmsg.textContent = 'adding boilerplate…';
+      try {
+        const r = await api('/api/boilerplate-apply', { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ point }) });
+        bmsg.textContent = r.updated
+          ? `boilerplate added to ${r.updated} of ${r.total} cards ✓ (rest already had it)`
+          : `all ${r.total} cards already have it`;
+        if (r.updated) showDeck();
+      } catch (e) { bmsg.textContent = 'error: ' + e.message; }
     };
     g.querySelector('.tpl-apply').onclick = async () => {
       bmsg.textContent = 'filling…';
@@ -1535,6 +1565,7 @@ async function showDeck() {
       const openCard = () => openPreview(
         { ...it, id: it.sentence_id },     // sentence id → media endpoints
         { item_id: it.id, point, template: pt.template || '',
+          boilerplate: pt.boilerplate || '',
           pointInfo: { title: pt.title || '', pattern: pt.pattern || '',
                        level: pt.level || '' } });
       row.onclick = (ev) => {
