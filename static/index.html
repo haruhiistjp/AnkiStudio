@@ -962,28 +962,81 @@ async function showProjects() {
   const d = await api('/api/projects');
   $('#view').innerHTML = '';
   const h = es('div'); h.innerHTML = '<h2>Projects</h2>'; $('#view').append(h);
+  const when = (t) => new Date(t * 1000).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   const cur = es('div'); cur.className = 'projrow current';
-  cur.innerHTML = '<div class="info"><div class="name">Current: ' + esc(d.current.name) + '</div>' +
-    '<div class="meta">' + d.current.sources + ' sources / ' + d.current.points + ' points</div></div>' +
-    '<button class="primary" id="prj-save-here">Save as .aproj</button>';
+  cur.innerHTML =
+    '<div class="info"><div class="name">Current: ' + esc(d.current.name) + '</div>' +
+    '<div class="meta">' + d.current.sources + ' sources / ' + d.current.points +
+    ' points · ' + esc(d.current.db) +
+    (d.current.is_default ? '' : ' · autosaves to data/projects/' +
+      esc(d.current.name) + '.aproj every ~20s') + '</div></div>' +
+    '<button id="prj-saveas">Save a copy as…</button>' +
+    (d.current.is_default ? '' : '<button class="primary" id="prj-close">Close project</button>');
   $('#view').append(cur);
-  $('#prj-save-here').onclick = async () => {
-    const r = await api('/api/project/save?name=' + d.current.name);
-    showProjects();
+  $('#prj-saveas').onclick = async () => {
+    cur.querySelector('#prj-saveas').disabled = true;
+    try {
+      const r = await api('/api/project/save-as', { method: 'POST',
+        headers: {'Content-Type':'application/json'}, body: '{}' });
+      const a = document.createElement('a');
+      a.href = '/api/export/file?name=' + encodeURIComponent(r.path);
+      a.download = r.name + '.aproj';
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) { alert('error: ' + e.message); }
+    cur.querySelector('#prj-saveas').disabled = false;
   };
+  if ($('#prj-close')) $('#prj-close').onclick = async () => {
+    await api('/api/project/close', { method: 'POST',
+      headers: {'Content-Type':'application/json'}, body: '{}' });
+    location.reload();
+  };
+  const bar = es('div'); bar.className = 'box'; bar.style.marginBottom = '14px';
+  bar.innerHTML = pickHTML('aprj', 'open an .aproj from anywhere', '.aproj') +
+    '<p class="hint">the file is copied into the project; if the same project ' +
+    'already has newer work here, that work is kept and resumed.</p>';
+  $('#view').append(bar);
+  const openPicked = async () => {
+    const f = document.getElementById('aprj').files[0];
+    if (!f) return;
+    $('#aprjname').textContent = 'opening ' + f.name + '…';
+    try {
+      const up = await uploadFile(f);
+      await api('/api/project/open', { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ path: up.path }) });
+      location.reload();
+    } catch (e) { $('#aprjname').textContent = 'error: ' + e.message; }
+  };
+  document.getElementById('aprj').addEventListener('change', openPicked);
   for (const proj of d.projects) {
     const row = es('div'); row.className = 'projrow';
-    row.innerHTML = '<div class="info"><div class="name">' + esc(proj.name) + '</div>' +
-      '<div class="meta">' + (proj.points||'?') + ' pts / ' + (proj.sentences||'?') + ' sentences' +
-      (proj.converter ? ' from ' + proj.converter : '') + '</div></div>' +
-      '<button class="primary">Open</button>';
+    const label = proj.kind === 'working'
+      ? `${proj.sentences != null ? proj.sentences.toLocaleString() + ' sentences · ' : ''}` +
+        `${proj.deck != null ? proj.deck + ' deck cards · ' : ''}` +
+        `working copy · saved ${when(proj.mtime)}`
+      : `snapshot · ${when(proj.mtime)}` +
+        (proj.sentences != null ? ` · ${proj.sentences.toLocaleString()} sentences` : '');
+    row.innerHTML = '<div class="info"><div class="name">' + esc(proj.name) +
+      (proj.current ? ' <span class="badge appr">open now</span>' : '') + '</div>' +
+      '<div class="meta">' + esc(label) + '</div></div>' +
+      '<button class="primary">' + (proj.current ? 'Reload' : 'Open') + '</button>';
     $('#view').append(row);
     row.querySelector('button').onclick = async () => {
       row.querySelector('button').textContent = 'opening…';
-      await api('/api/project/open', { method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ path: proj.file }) });
-      location.reload();
+      const url = proj.kind === 'working' ? '/api/project/open-db' : '/api/project/open';
+      const body = proj.kind === 'working' ? { path: proj.db } : { path: proj.file };
+      try {
+        const r = await api(url, { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(body) });
+        if (r.resumed && !proj.current)
+          console.info('resumed the newer working copy');
+        location.reload();
+      } catch (e) {
+        row.querySelector('button').textContent = 'error';
+        alert('error: ' + e.message);
+      }
     };
   }
 }
@@ -996,22 +1049,24 @@ async function showPoints() {
   const f = es('div'); f.className = 'box';
   f.innerHTML =
     '<h2 style="font-size:15px">Import points</h2>' +
-    '<label>paste YAML (list of {id, title, pattern, level, module, target_hint}) or pick the CureDolly points.yaml</label>' +
+    '<label>paste YAML (list of {id, title, pattern, level, module, target_hint}) or pick a .yaml file</label>' +
     '<textarea id="ptxt" rows="6" style="width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-family:monospace;font-size:12px" placeholder="- id: GP-001"></textarea>' +
-    '<div class="row" style="margin-top:10px">' +
-    '<input id="ppath" placeholder="/path/to/points.yaml" style="flex:1">' +
-    '<button id="pbrowse">Browse…</button>' +
-    '<button class="primary" id="pgo">Import</button></div>' +
+    '<div class="row" style="margin-top:10px">' + pickHTML('pfile', 'points file', '.yaml,.yml') +
+    '<button class="primary" id="pgo" style="margin-top:0">Import</button></div>' +
     '<div id="pmsg" class="dim" style="margin-top:8px"></div>';
   $('#view').append(f);
-  $('#pbrowse').onclick = () => dmOpen($('#ppath'), '~', 'yaml,yml');
   $('#pgo').onclick = async () => {
     $('#pmsg').textContent = 'importing…';
     try {
+      let body = { yaml_text: $('#ptxt').value, path: '' };
+      const pf = document.getElementById('pfile').files[0];
+      if (!body.yaml_text && pf) {
+        const up = await uploadFile(pf);
+        body = { yaml_text: '', path: up.path };
+      }
       const r = await api('/api/points/import', { method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ yaml_text: $('#ptxt').value,
-                               path: $('#ppath').value }) });
+        body: JSON.stringify(body) });
       $('#pmsg').textContent = `imported ${r.imported} points`;
       setTimeout(showPoints, 900);
     } catch (e) { $('#pmsg').textContent = 'error: ' + e.message; }

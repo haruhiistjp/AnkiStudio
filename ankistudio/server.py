@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import subprocess as _sp
 from pathlib import Path
 
@@ -143,8 +144,94 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
 def create_app(db_path: str | Path) -> FastAPI:
+    # the data dir (and the project pointer inside it) stay fixed even
+    # after the store is switched to a project db
+    default_db = Path(db_path).resolve()
+    data_dir = default_db.parent
+    pointer = data_dir / "current-project"
+    startup_db = default_db
+    if pointer.exists():
+        try:
+            p = Path(pointer.read_text(encoding="utf-8").strip())
+            if p.suffix == ".db" and p.exists():
+                startup_db = p              # resume the last open project
+        except OSError:
+            pass
     app = FastAPI(title="AnkiStudio")
-    store = Store(db_path)
+    store = Store(startup_db)
+
+    def _reopen(path: Path):
+        store.reopen(path)
+        pointer.write_text(str(path), encoding="utf-8")
+        bust_stats()
+
+    def _write_aproj(out: Path, name: str):
+        """Snapshot the live store into a portable .aproj at `out`."""
+        import json as _j
+        import zipfile as _z
+        import tempfile as _t
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with _t.TemporaryDirectory(dir=str(out.parent)) as td:
+            dbfile = Path(td) / "project.db"
+            store.snapshot_to(dbfile)
+            manifest = {
+                "format": "ankistudio-project", "version": 1,
+                "name": name,
+                "created": __import__("datetime").datetime.now().isoformat(),
+                "app": "AnkiStudio",
+                "sources": [dict(r) for r in store.sources()],
+                "sentences": store.db.execute(
+                    "select count(*) c from sentences").fetchone()["c"],
+                "points": len(store.points()),
+            }
+            tmp = out.with_suffix(out.suffix + ".partial")
+            with _z.ZipFile(tmp, "w", _z.ZIP_DEFLATED) as z:
+                z.writestr("manifest.json",
+                           _j.dumps(manifest, ensure_ascii=False, indent=1))
+                z.write(dbfile, "project.db")
+            tmp.replace(out)
+
+    def _archive_db_mtime(aproj: Path) -> float:
+        """Timestamp of the db inside the archive — decides whether the
+        working copy is newer (must never be clobbered by an old snapshot)."""
+        import zipfile as _z
+        import calendar as _calendar
+        try:
+            with _z.ZipFile(aproj) as z:
+                # date_time is a (y, m, d, h, min, s) tuple
+                return _calendar.timegm(z.getinfo("project.db").date_time)
+        except Exception:
+            return 0.0
+
+    def _open_aproj(aproj: Path) -> dict:
+        import zipfile as _z
+        import json as _j
+        if not aproj.exists() or aproj.suffix != ".aproj":
+            raise HTTPException(404, f"not an .aproj file: {aproj}")
+        try:
+            with _z.ZipFile(aproj) as z:
+                names = z.namelist()
+                if "project.db" not in names or "manifest.json" not in names:
+                    raise ValueError("not an AnkiStudio project archive")
+                manifest = _j.loads(z.read("manifest.json"))
+        except (_z.BadZipFile, ValueError) as e:
+            raise HTTPException(400, f"bad .aproj: {e}")
+        dest_dir = data_dir / "projects" / aproj.stem
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        wdb = dest_dir / "project.db"
+        resumed = False
+        if wdb.exists() and wdb.stat().st_mtime >= _archive_db_mtime(aproj):
+            # the working copy has newer work than the snapshot — resume it
+            resumed = True
+        else:
+            import zipfile as _zz
+            with _zz.ZipFile(aproj) as z:
+                z.extract("project.db", dest_dir)
+        _reopen(wdb)
+        return {"opened": str(aproj), "resumed": resumed,
+                "name": manifest.get("name") or aproj.stem,
+                "sources": manifest.get("sources", 0)}
+
     # /api/stats backs every view; on 200k+ sentences its aggregate queries
     # take real time, so short-lived caching keeps navigation snappy
     stats_cache: dict = {"at": 0.0, "v": None}
@@ -745,81 +832,142 @@ def create_app(db_path: str | Path) -> FastAPI:
 
     # ---------- project (.aproj) ----------
 
-    @app.get("/api/project/save")
-    def project_save(path: str = "", name: str = "ankistudio"):
-        """Snapshot the live store into a portable .aproj (zip: manifest +
-        project.db). Media stays in its sources; the file references them."""
-        import json as _j
+    @app.post("/api/project/open")
+    def project_open(req: ProjectOpenReq):
+        """Open an .aproj from anywhere on disk. If its extracted working
+        copy in data/projects/ holds NEWER work, the working copy is
+        resumed instead of being clobbered by the older snapshot."""
+        return _open_aproj(Path(req.path).expanduser())
+
+    @app.post("/api/project/open-db")
+    def project_open_db(req: ProjectOpenReq):
+        """Switch straight to a project's working db (from /api/projects)."""
         import zipfile as _z
-        import tempfile as _t
+        p = Path(req.path).expanduser().resolve()
+        projects_root = (data_dir / "projects").resolve()
+        # layout is data/projects/<stem>/project.db — the file's
+        # GRANDparent is the projects root
+        if p.parent.parent != projects_root or p.name != "project.db" \
+                or not p.exists():
+            raise HTTPException(404, "no such working project")
+        _reopen(p)
+        return {"opened": str(p), "resumed": True,
+                "name": store.get_setting("project_name", p.parent.name)}
+
+    @app.post("/api/project/close")
+    def project_close():
+        """Back to the default working project (data/studio.db)."""
+        _reopen(default_db)
+        pointer.unlink(missing_ok=True)
+        return {"closed": True, "db": str(default_db)}
+
+    @app.get("/api/project/save")
+    def project_save(path: str = "", name: str = ""):
+        """Snapshot the live store into a .aproj at `path` (or result/)."""
         out = Path(path).expanduser() if path else None
+        name = name or store.get_setting("project_name", "ankistudio")
         if out and not str(out).endswith(".aproj"):
             out = out / f"{name}.aproj"
         if not out:
-            result = Path("result"); result.mkdir(exist_ok=True)
+            result = data_dir.parent / "result"
+            result.mkdir(exist_ok=True)
             out = result / f"{name}.aproj"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with _t.TemporaryDirectory() as td:
-            dbfile = Path(td) / "project.db"
-            store.snapshot_to(dbfile)
-            manifest = {
-                "format": "ankistudio-project", "version": 1,
-                "name": name,
-                "created": __import__("datetime").datetime.now().isoformat(),
-                "app": "AnkiStudio",
-                "sources": [dict(r) for r in store.sources()],
-            }
-            with _z.ZipFile(out, "w", _z.ZIP_DEFLATED) as z:
-                z.writestr("manifest.json", _j.dumps(manifest, ensure_ascii=False, indent=1))
-                z.write(dbfile, "project.db")
+        _write_aproj(out, name)
         return {"path": str(out)}
 
-    @app.post("/api/project/open")
-    def project_open(req: ProjectOpenReq):
-        import zipfile as _z
-        import tempfile as _t
-        p = Path(req.path).expanduser()
-        if not p.exists() or p.suffix != ".aproj":
-            raise HTTPException(404, f"not an .aproj file: {p}")
-        try:
-            with _z.ZipFile(p) as z:
-                names = z.namelist()
-                if "project.db" not in names or "manifest.json" not in names:
-                    raise ValueError("not an AnkiStudio project archive")
-                dest_dir = Path("data/projects") / p.stem
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                z.extract("project.db", dest_dir)
-                manifest = __import__("json").loads(z.read("manifest.json"))
-        except (_z.BadZipFile, ValueError) as e:
-            raise HTTPException(400, f"bad .aproj: {e}")
-        store.reopen(dest_dir / "project.db")
-        bust_stats()
-        return {"opened": str(p), "name": manifest.get("name"),
-                "sources": manifest.get("sources", 0)}
-
-    # ---------- projects ----------
+    @app.post("/api/project/save-as")
+    def project_save_as(name: str = ""):
+        """Build the .aproj server-side and return a download URL — the
+        browser's save dialog puts it anywhere the user wants."""
+        import uuid as _uuid
+        name = name or store.get_setting("project_name",
+                                         store.path.parent.name
+                                         if store.path.parent != data_dir
+                                         else "ankistudio")
+        out = data_dir / "tmp"
+        out.mkdir(parents=True, exist_ok=True)
+        f = out / f"{_uuid.uuid4().hex[:8]}-{name}.aproj"
+        _write_aproj(f, name)
+        return {"path": str(f), "name": name}
 
     @app.get("/api/projects")
     def projects_list():
-        """All .aproj files in data/projects/ + the live db."""
-        import glob as _g
-        projs = []
-        for f in sorted(Path("data/projects").glob("*.aproj")):
+        """Everything openable: working copies under data/projects/ (live
+        state, mtimes tell which is freshest), their .aproj snapshots, and
+        the default working project."""
+        import json as _j
+        import zipfile as _z
+        from datetime import datetime as _dt
+        projs_dir = data_dir / "projects"
+        entries = []
+        cur_path = store.path.resolve()
+        if projs_dir.is_dir():
+            for d in sorted(projs_dir.iterdir()):
+                wdb = d / "project.db"
+                if not wdb.exists():
+                    continue
+                meta = {"name": d.name, "kind": "working",
+                        "db": str(wdb), "mtime": wdb.stat().st_mtime,
+                        "current": wdb.resolve() == cur_path}
+                try:
+                    ro = sqlite3.connect(f"file:{wdb}?mode=ro", uri=True)
+                    meta["sentences"] = ro.execute(
+                        "select count(*) c from sentences").fetchone()[0]
+                    meta["deck"] = ro.execute(
+                        "select count(*) c from deck_items").fetchone()[0]
+                    ro.close()
+                except Exception:
+                    pass
+                entries.append(meta)
+        for f in sorted(projs_dir.glob("*.aproj")) if projs_dir.is_dir() else []:
             try:
-                import zipfile as _z, json as _j
                 with _z.ZipFile(f) as z:
                     m = _j.loads(z.read("manifest.json"))
-                projs.append({"file": str(f), "name": m.get("name", f.stem),
-                              "points": m.get("points"), "sentences": m.get("sentences"),
-                              "converter": m.get("converter", "")})
+                entries.append({"name": f.stem, "kind": "archive",
+                                "file": str(f), "mtime": f.stat().st_mtime,
+                                "manifest_name": m.get("name", f.stem),
+                                "sentences": m.get("sentences")})
             except Exception:
-                projs.append({"file": str(f), "name": f.stem, "error": True})
-        # the live db is also a project (unsaved)
-        live_name = store.get_setting("project_name", "working project")
-        return {"projects": projs, "current": {
-            "name": live_name, "live": True,
+                entries.append({"name": f.stem, "kind": "archive",
+                                "file": str(f), "mtime": f.stat().st_mtime,
+                                "error": True})
+        entries.sort(key=lambda e: e["mtime"], reverse=True)
+        return {"projects": entries, "current": {
+            "db": str(store.path), "name": store.get_setting(
+                "project_name", store.path.parent.name
+                if store.path.parent != data_dir else "working project"),
+            "is_default": store.path.resolve() == default_db.resolve(),
+            "live": True,
             "sources": len(store.sources()),
             "points": len(store.points())}}
+
+    # autosave: while a project db is open, keep its .aproj snapshot in
+    # data/projects/ fresh (~20s after changes) so a crash or a stray
+    # reopen can never lose more than seconds of review work
+    import threading
+    import time as _time
+
+    def _autosave_loop():
+        import sys
+        import traceback
+        last_changes = None
+        while True:
+            _time.sleep(20)
+            try:
+                # layout: data/projects/<stem>/project.db — compare the
+                # grandparent, not the direct parent
+                if store.path.parent.parent == data_dir / "projects":
+                    ch = store.db.total_changes
+                    if ch != last_changes:
+                        last_changes = ch
+                        _write_aproj(data_dir / "projects" /
+                                     f"{store.path.parent.name}.aproj",
+                                     store.path.parent.name)
+            except Exception:
+                # never kill the loop — but leave a trace in the server log
+                traceback.print_exc(file=sys.stderr)
+
+    threading.Thread(target=_autosave_loop, daemon=True).start()
 
     @app.post("/api/pool-decide")
     def pool_decide(req: PoolDecideReq):
