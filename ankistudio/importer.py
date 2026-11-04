@@ -247,19 +247,25 @@ def import_video(store, video_path: str | Path, subs_path: str | Path,
         })
     store.add_sentences(src_id, rows)
 
-    # frames for kept cues while the temp video still exists
+    # frames for kept cues while the temp video still exists — the grabs
+    # are independent ffmpeg seeks, so they run in parallel (an import
+    # with several hundred cues drops from minutes to well under a minute)
+    from concurrent.futures import ThreadPoolExecutor
     meta0 = {"offset": offset, "segments": []}
-    frames = 0
-    for r in rows:
-        if not r["keep"]:
-            continue
-        t = float(r["start"]) + (float(r["end"]) - float(r["start"])) * 0.4
+
+    def _grab(row):
+        t = float(row["start"]) + \
+            (float(row["end"]) - float(row["start"])) * 0.4
         try:
-            ff.grab_frame_to(video_path, t, ff.frame_cache_path(src_id, r["ref"]),
+            ff.grab_frame_to(video_path, t,
+                             ff.frame_cache_path(src_id, row["ref"]),
                              meta=meta0)
-            frames += 1
+            return 1
         except _sp.CalledProcessError:
-            pass
+            return 0
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        frames = sum(ex.map(_grab, [r for r in rows if r["keep"]]))
 
     # the temp video is never kept; also sweep stale temp uploads.
     # resolve() both sides: uploads are stored with resolved paths while

@@ -77,6 +77,30 @@ class DeckAddReq(BaseModel):
     note: str = ""
 
 
+class PointUpdateReq(BaseModel):
+    template: str | None = None
+    title: str | None = None
+
+
+class TemplateApplyReq(BaseModel):
+    point: str
+
+
+class AIFillReq(BaseModel):
+    item_id: int                   # deck item to explain
+    instruction: str = ""
+
+
+class AIBlockReq(BaseModel):
+    point: str
+    instruction: str = ""
+    only_empty: bool = True
+
+
+class SettingsReq(BaseModel):
+    values: dict[str, str] = {}
+
+
 class DeckUpdateReq(BaseModel):
     position: int | None = None
     note: str | None = None
@@ -830,6 +854,160 @@ def create_app(db_path: str | Path) -> FastAPI:
         store.deck_remove(item_id)
         return {"removed": item_id}
 
+    # ---------- deck redactor: templates + AI explanations ----------
+
+    @app.get("/api/settings")
+    def settings_get():
+        from .ai import DEFAULTS
+        vals = {k: store.get_setting(k, "") for k in DEFAULTS}
+        vals.update({k: store.get_setting(k, "") for k in (
+            "export_out_dir", "pad_start", "pad_end")})
+        vals["project_name"] = store.get_setting("project_name", "")
+        return {"values": vals, "defaults": DEFAULTS,
+                "ai_configured": bool(vals["ai_base"] and vals["ai_model"])}
+
+    @app.post("/api/settings")
+    def settings_set(req: SettingsReq):
+        from .ai import DEFAULTS
+        allowed = set(DEFAULTS) | {
+            "export_out_dir", "pad_start", "pad_end", "project_name"}
+        for k, v in req.values.items():
+            if k in allowed:
+                store.set_setting(k, str(v)[:4000])
+        return {"ok": True}
+
+    @app.post("/api/ai/test")
+    def ai_test():
+        from .ai import chat
+        try:
+            out = chat(store, [{"role": "user",
+                                "content": "Reply with exactly: ok"}],
+                       max_tokens=5)
+            return {"ok": True, "reply": out[:80]}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/point/{pid}")
+    def point_update(pid: str, req: PointUpdateReq):
+        r = store.db.execute("select id from grammar_points where id=?",
+                             (pid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "no such point")
+        if req.template is not None:
+            store.db.execute("update grammar_points set template=? where id=?",
+                             (req.template, pid))
+        if req.title is not None:
+            store.db.execute("update grammar_points set title=? where id=?",
+                             (req.title, pid))
+        store.db.commit()
+        return {"ok": True}
+
+    @app.post("/api/template-apply")
+    def deck_template_apply(req: TemplateApplyReq):
+        """Fill every EMPTY note of a point's cards from the point's
+        template. Placeholders: {sentence} {reading} {translation} {title}
+        {pattern} {level} {source} {episode}."""
+        r = store.db.execute(
+            "select id, title, pattern, level, template from grammar_points"
+            " where id=?", (req.point,)).fetchone()
+        if not r or not (r["template"] or "").strip():
+            raise HTTPException(400, "this point has no template yet")
+        items = store.db.execute(
+            "select d.id, d.note, n.text, n.reading, n.translation,"
+            " n.episode, s.name source_name from deck_items d"
+            " join sentences n on n.id=d.sentence_id"
+            " join sources s on s.id=n.source_id"
+            " where d.point=? order by d.position, d.id",
+            (req.point,)).fetchall()
+        filled = 0
+        for it in items:
+            if (it["note"] or "").strip():
+                continue
+            note = r["template"].format(
+                sentence=it["text"] or "", reading=it["reading"] or "",
+                translation=it["translation"] or "", title=r["title"] or "",
+                pattern=r["pattern"] or "", level=r["level"] or "",
+                source=it["source_name"] or "", episode=it["episode"] or "")
+            store.deck_update(it["id"], note=note)
+            filled += 1
+        return {"filled": filled, "total": len(items)}
+
+    @app.post("/api/ai/fill")
+    def ai_fill(req: AIFillReq):
+        """Explain one deck card through the configured AI API."""
+        from .ai import chat, DEFAULTS
+        it = store.db.execute(
+            "select d.id, d.note, d.point, n.text, n.reading, n.translation,"
+            " s.name source_name from deck_items d"
+            " join sentences n on n.id=d.sentence_id"
+            " join sources s on s.id=n.source_id where d.id=?",
+            (req.item_id,)).fetchone()
+        if not it:
+            raise HTTPException(404, "no such deck item")
+        pt = store.db.execute(
+            "select id, title, pattern, level, template from grammar_points"
+            " where id=?", (it["point"] or "",)).fetchone()
+        ctx = (f"Grammar point: {pt['id']} — {pt['title'] or ''}"
+               f" (pattern: {pt['pattern'] or '—'})\n"
+               if pt else "Grammar point: (none)\n") + \
+            f"Sentence: {it['text']}\n" + \
+            (f"Reading: {it['reading']}\n" if it["reading"] else "") + \
+            (f"Translation: {it['translation']}\n" if it["translation"] else "")
+        user = ctx + (f"\nInstruction: {req.instruction}"
+                      if req.instruction else "")
+        try:
+            text = chat(store, [
+                {"role": "system",
+                 "content": store.get_setting("ai_prompt_card",
+                                              DEFAULTS["ai_prompt_card"])},
+                {"role": "user", "content": user}])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"note": text}
+
+    @app.post("/api/ai/fill-block")
+    def ai_fill_block(req: AIBlockReq):
+        """Explain a whole block (grammar point) in ONE API call — the
+        model returns a JSON array keyed by card number, same order."""
+        from .ai import chat, extract_json_array, DEFAULTS
+        ptsql = "select id, title, pattern from grammar_points where id=?"
+        pt = store.db.execute(ptsql, (req.point,)).fetchone()
+        items = store.db.execute(
+            "select d.id, d.note, n.text from deck_items d"
+            " join sentences n on n.id=d.sentence_id"
+            " where d.point=? order by d.position, d.id",
+            (req.point,)).fetchall()
+        if req.only_empty:
+            items = [i for i in items if not (i["note"] or "").strip()]
+        if not items:
+            return {"updated": 0, "message": "no cards without notes"}
+        listing = "\n".join(f"{n}. {i['text']}"
+                            for n, i in enumerate(items, 1))
+        header = (f"Grammar point: {pt['id']} — {pt['title'] or ''}"
+                  f" (pattern: {pt['pattern'] or '—'})\n" if pt else "")
+        user = header + "Sentences:\n" + listing + \
+            (f"\n\nInstruction: {req.instruction}" if req.instruction else "")
+        try:
+            reply = chat(store, [
+                {"role": "system",
+                 "content": store.get_setting("ai_prompt_block",
+                                              DEFAULTS["ai_prompt_block"])},
+                {"role": "user", "content": user}], max_tokens=200 * len(items))
+            parsed = extract_json_array(reply)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        updated = 0
+        for obj in parsed:
+            try:
+                n = int(obj.get("n", 0))
+                note = str(obj.get("note", "")).strip()
+                if 1 <= n <= len(items) and note:
+                    store.deck_update(items[n - 1]["id"], note=note)
+                    updated += 1
+            except (TypeError, ValueError):
+                continue
+        return {"updated": updated, "cards": len(items)}
+
     # ---------- project (.aproj) ----------
 
     @app.post("/api/project/open")
@@ -915,6 +1093,8 @@ def create_app(db_path: str | Path) -> FastAPI:
                         "select count(*) c from sentences").fetchone()[0]
                     meta["deck"] = ro.execute(
                         "select count(*) c from deck_items").fetchone()[0]
+                    meta["points"] = ro.execute(
+                        "select count(*) c from grammar_points").fetchone()[0]
                     ro.close()
                 except Exception:
                     pass
@@ -929,7 +1109,8 @@ def create_app(db_path: str | Path) -> FastAPI:
                 entries.append({"name": f.stem, "kind": "archive",
                                 "file": str(f), "mtime": f.stat().st_mtime,
                                 "manifest_name": m.get("name", f.stem),
-                                "sentences": m.get("sentences")})
+                                "sentences": m.get("sentences"),
+                                "points": m.get("points")})
             except Exception:
                 entries.append({"name": f.stem, "kind": "archive",
                                 "file": str(f), "mtime": f.stat().st_mtime,

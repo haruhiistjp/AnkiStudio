@@ -164,15 +164,45 @@ def prepare(media: Path, cues: list[dict], astream: int | None,
 
 
 def _summarize(samples: list[dict], model: str) -> dict:
-    offsets = [float(s["offset"]) for s in samples if s["offset"] is not None]
+    good = [s for s in samples if s["offset"] is not None]
+    offsets = [float(s["offset"]) for s in good]
     median = round(statistics.median(offsets), 2) if len(offsets) >= 2 else None
     consistent = False
     if median is not None:
         mad = statistics.median(abs(o - median) for o in offsets)
         consistent = mad <= CONSISTENCY
+
+    # Two-shift detection: when the episode's drift CHANGES partway
+    # (different release timings spliced, broadcast cuts), a single
+    # global offset cannot fit and `consistent` comes out false. Look
+    # for a time-ordered split into two coherent clusters and report it
+    # as offset + segment so Apply can configure both.
+    split = None
+    timed = sorted((s for s in good if s.get("at") is not None),
+                   key=lambda s: s["at"])
+    if len(timed) >= 4:
+        best = None
+        for k in range(2, len(timed) - 1):
+            left = [s["offset"] for s in timed[:k]]
+            right = [s["offset"] for s in timed[k:]]
+            m1, m2 = statistics.median(left), statistics.median(right)
+            if abs(m1 - m2) < 0.75:
+                continue        # not a real shift change
+            mad1 = statistics.median(abs(o - m1) for o in left)
+            mad2 = statistics.median(abs(o - m2) for o in right)
+            if mad1 > 0.5 or mad2 > 0.5:
+                continue        # clusters themselves are smeared — not a clean split
+            cost = mad1 + mad2
+            if best is None or cost < best[0]:
+                best = (cost, m1, m2, timed[k]["at"])
+        if best:
+            _, m1, m2, at = best
+            split = {"at": round(float(at), 1), "shift": round(m2, 2),
+                     "before": round(m1, 2)}
+
     return {"samples": samples, "matched": len(offsets),
             "total": len(samples), "median": median,
-            "consistent": consistent, "model": model}
+            "consistent": consistent, "split": split, "model": model}
 
 
 def run_measure(prep: dict):
@@ -200,6 +230,7 @@ def run_measure(prep: dict):
                                         cue, margin, clip_max, run_to,
                                         prep["wbin"], prep["model"], td, seq)
                     smp["window"] = f"±{margin:.0f}s"
+                    smp["at"] = round(float(cue["start"]), 1)
                     samples.append(smp)
                     yield {"sample": smp, "done": len(samples)}
                     blind_streak = (blind_streak + 1

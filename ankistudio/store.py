@@ -70,7 +70,8 @@ create table if not exists grammar_points(
   pattern text,
   level text,
   module text,                   -- lesson/topic grouping
-  hints text                     -- csv of match hints (optional)
+  hints text,                    -- csv of match hints (optional)
+  template text default ''       -- explanation template for deck cards
 );
 create table if not exists deck_items(
   id integer primary key,
@@ -100,7 +101,14 @@ class Store:
         self._lock = threading.Lock()
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
+
+    def _migrate(self):
+        """Columns added after the first release; safe on fresh dbs too."""
+        have = [r[1] for r in self.db.execute("pragma table_info(grammar_points)")]
+        if "template" not in have:
+            self.db.execute("alter table grammar_points add column template text default ''")
 
     def close(self):
         self.db.close()
@@ -113,6 +121,7 @@ class Store:
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
 
     def snapshot_to(self, dest: str | Path):

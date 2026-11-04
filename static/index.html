@@ -158,11 +158,8 @@ form.box input { width:100%; }
     <a data-view="review">Batch review</a>
     <a data-view="deck">Deck</a>
     <a data-view="export">Export deck</a>
-    <div class="sect">Later phases</div>
-    <a class="dim">Video + subs</a>
-    <a class="dim">Vocabulary flow</a>
-    <a class="dim">Grammar flow</a>
-    <a class="dim">AI settings</a>
+    <div class="sect">Setup</div>
+    <a data-view="settings">Settings</a>
     <select id="themeSel" title="theme">
       <option value="auto">Auto theme</option>
       <option value="light">Light</option>
@@ -492,9 +489,12 @@ async function showSources() {
           { video: VS.video.path, subs: VS.subs.path,
             astream: $('#vtrack') ? +$('#vtrack').value : null,
             sub_lang: $('#vlang') ? $('#vlang').value : 'auto' },
-          (median) => () => {
-            $('#vo').value = median;
-            pres.textContent = `offset set to ${median}s ✓ — now Import`;
+          (r) => () => {
+            $('#vo').value = r.median;
+            pres.textContent = r.split
+              ? `offset ${r.median}s set — import, then add the segment ` +
+                `(+${r.split.shift}s from ${r.split.at}s) in this source's box`
+              : `offset set to ${r.median}s ✓ — now Import`;
           });
         pdet.onclick = async () => {
           pdet.disabled = true;
@@ -616,11 +616,15 @@ async function loadShift(box, sid) {
   box.querySelector('.save').onclick = save;
   // Whisper-based global-shift detection (analysis only; Apply writes it)
   const wsp = box.querySelector('.wsp'), wres = box.querySelector('.wsres');
+  const addSegEl = addSeg;                       // segment editor in scope
   const wspRun = () => runDetect(wres, `/api/video/${sid}/whisper`, {},
-    (median) => async () => {
-      box.querySelector('.voff').value = median;
+    (r) => async () => {
+      box.querySelector('.voff').value = r.median;
+      if (r.split) addSegEl(r.split.at, r.split.shift);
       await save();
-      wres.textContent = `offset set to ${median}s ✓`;
+      wres.textContent = `offset ${r.median}s` +
+        (r.split ? ` + segment ${r.split.shift}s from ${r.split.at}s` : '') +
+        ' applied ✓';
     });
   wsp.onclick = async () => {
     wsp.disabled = true;
@@ -677,6 +681,60 @@ async function showLexicons() {
   }
     $('#view').append(t);
   }
+}
+
+/* ---------- settings ---------- */
+async function showSettings() {
+  const d = await api('/api/settings');
+  const v = d.values || {}, defs = d.defaults || {};
+  $('#view').innerHTML = '';
+  const h = es('div'); h.innerHTML = '<h2>Settings</h2>'; $('#view').append(h);
+  const f = es('div'); f.className = 'box';
+  f.innerHTML =
+    '<h2 style="font-size:15px">AI API (deck explanations)</h2>' +
+    '<p class="hint">any OpenAI-compatible /chat/completions endpoint works — ' +
+    'OpenAI, Groq, OpenRouter, a local ollama/llama.cpp server. Configure it ' +
+    'once and the ✦ buttons in Deck explain cards.</p>' +
+    '<label>base URL</label><input id="s-ai_base" placeholder="https://api.openai.com/v1" value="' + esc(v.ai_base || '') + '">' +
+    '<label>model</label><input id="s-ai_model" placeholder="gpt-4o-mini" value="' + esc(v.ai_model || '') + '">' +
+    '<label>API key</label><input id="s-ai_key" type="password" placeholder="sk-…" value="' + esc(v.ai_key || '') + '">' +
+    '<label>system prompt — single card</label>' +
+    '<textarea id="s-ai_prompt_card" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px">' + esc(v.ai_prompt_card || defs.ai_prompt_card || '') + '</textarea>' +
+    '<label>system prompt — whole block (must return a JSON array)</label>' +
+    '<textarea id="s-ai_prompt_block" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px">' + esc(v.ai_prompt_block || defs.ai_prompt_block || '') + '</textarea>' +
+    '<div class="row" style="margin-top:8px"><button id="s-aitest">Test AI API</button><span class="dim" id="s-aitestmsg"></span></div>' +
+    '<h2 style="font-size:15px;margin-top:18px">Defaults</h2>' +
+    '<label>project name (used for .aproj saves)</label><input id="s-project_name" value="' + esc(v.project_name || '') + '">' +
+    '<label>export output folder</label><input id="s-export_out_dir" placeholder="result" value="' + esc(v.export_out_dir || '') + '">' +
+    '<div class="row" style="margin:0">' +
+    '<label style="margin:0">default lead pad<input id="s-pad_start" type="number" step="0.05" min="0" max="5" style="width:80px" value="' + esc(v.pad_start || '') + '"></label>' +
+    '<label style="margin:0">default tail pad<input id="s-pad_end" type="number" step="0.05" min="0" max="5" style="width:80px" value="' + esc(v.pad_end || '') + '"></label></div>' +
+    '<button class="primary" id="s-save" style="margin-top:12px">Save settings</button>' +
+    '<span class="dim" id="s-msg" style="margin-left:10px"></span>';
+  $('#view').append(f);
+  $('#s-aitest').onclick = async () => {
+    $('#s-aitestmsg').textContent = 'asking…';
+    await saveSettings();
+    try {
+      const r = await api('/api/ai/test', { method: 'POST',
+        headers: {'Content-Type':'application/json'}, body: '{}' });
+      $('#s-aitestmsg').textContent = '✓ replied: ' + r.reply;
+    } catch (e) { $('#s-aitestmsg').textContent = 'error: ' + e.message; }
+  };
+  const saveSettings = async () => {
+    const values = {};
+    for (const id of ['ai_base', 'ai_key', 'ai_model', 'ai_prompt_card',
+                      'ai_prompt_block', 'project_name', 'export_out_dir',
+                      'pad_start', 'pad_end'])
+      values[id] = document.getElementById('s-' + id).value;
+    await api('/api/settings', { method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ values }) });
+  };
+  $('#s-save').onclick = async () => {
+    await saveSettings();
+    $('#s-msg').textContent = 'saved ✓';
+  };
 }
 
 /* ---------- theme ---------- */
@@ -787,6 +845,13 @@ async function showExport() {
     '<button class="primary" id="xgo" style="margin-top:14px">Build .apkg</button>' +
     '<div id="xres" class="dim" style="margin-top:10px"></div>';
   $('#view').append(f);
+  // defaults from Settings
+  api('/api/settings').then(st => {
+    const v = st.values || {};
+    if (v.export_out_dir) $('#xdir').value = v.export_out_dir;
+    if (v.pad_start) $('#xps').value = v.pad_start;
+    if (v.pad_end) $('#xpe').value = v.pad_end;
+  }).catch(() => {});
   $('#xgo').onclick = async () => {
     $('#xres').textContent = 'building…';
     try {
@@ -900,10 +965,11 @@ function renderDetectResult(el, r, onApply) {
   el.innerHTML = '';
   const t = es('span');
   t.textContent = `detected ${r.median >= 0 ? '+' : ''}${r.median}s ` +
-    `(${r.matched}/${r.total} cues${r.consistent ? '' : ' ⚠ cues disagree'}) `;
+    `(${r.matched}/${r.total} cues${r.consistent ? '' : ' ⚠ cues disagree'})` +
+    (r.split ? ` · drift changes to ${r.split.shift >= 0 ? '+' : ''}${r.split.shift}s at ${r.split.at}s` : '') + ' ';
   const apply = es('button');
-  apply.textContent = `Use ${r.median >= 0 ? '+' : ''}${r.median}s`;
-  apply.onclick = onApply(r.median);
+  apply.textContent = r.split ? 'Apply both' : `Use ${r.median >= 0 ? '+' : ''}${r.median}s`;
+  apply.onclick = onApply(r);
   el.append(t, apply);
 }
 
@@ -1013,10 +1079,12 @@ async function showProjects() {
     const label = proj.kind === 'working'
       ? `${proj.sentences != null ? proj.sentences.toLocaleString() + ' sentences · ' : ''}` +
         `${proj.deck != null ? proj.deck + ' deck cards · ' : ''}` +
+        `${proj.points != null ? proj.points + ' blocks · ' : ''}` +
         `working copy · saved ${when(proj.mtime)}` +
         (proj.history ? ` · ${proj.history} history versions` : '')
       : `snapshot · ${when(proj.mtime)}` +
-        (proj.sentences != null ? ` · ${proj.sentences.toLocaleString()} sentences` : '');
+        (proj.sentences != null ? ` · ${proj.sentences.toLocaleString()} sentences` : '') +
+        (proj.points != null ? ` · ${proj.points} blocks` : '');
     row.innerHTML = '<div class="info"><div class="name">' + esc(proj.name) +
       (proj.current ? ' <span class="badge appr">open now</span>' : '') + '</div>' +
       '<div class="meta">' + esc(label) + '</div></div>' +
@@ -1153,11 +1221,19 @@ async function showReview(prePoint) {
       '<div id="rv-progress"></div>' +
       '<div id="rv-card"></div>' +
       '<div id="rv-meta"></div>' +
-      '<div class="row" style="justify-content:center;margin-top:10px">' +
-      '<button id="rv-undo" style="display:none">← Undo last</button></div>' +
-      '<div id="rv-keys"><b>Space</b> replay · <b>A/→</b> approve · <b>X</b> reject · <b>S/←</b> skip · <b>Z</b> undo · <b>Esc</b> back</div>';
+      '<div class="row" style="justify-content:center;margin-top:10px;flex-wrap:wrap">' +
+      '<button id="rv-undo" style="display:none">← Undo</button>' +
+      '<button class="ok" id="rv-ok">✓ Approve <span class="dim">(A)</span></button>' +
+      '<button id="rv-later">Later <span class="dim">(S)</span></button>' +
+      '<button id="rv-move">⇄ Move to another block <span class="dim">(M)</span></button>' +
+      '<button class="no" id="rv-no">✕ Reject <span class="dim">(X)</span></button></div>' +
+      '<div id="rv-keys"><b>Space</b> replay · <b>Z</b> undo · <b>Esc</b> back · later cards resurface in future pools</div>';
     $('#view').append(area);
     $('#rv-undo').onclick = rvUndo;
+    $('#rv-ok').onclick = () => rvDecide('ok');
+    $('#rv-later').onclick = () => rvDecide('skip');
+    $('#rv-move').onclick = rvMoveTo;
+    $('#rv-no').onclick = () => rvDecide('no');
     rvShow();
   };
 }
@@ -1172,8 +1248,10 @@ function rvShow() {
     const st = RV.done[i];
     return `<i class="${st === 'ok' ? 'ok' : st === 'no' ? 'no' : ''}"></i>`;
   }).join('');
-  const img = r.media_image ? `<img src="/api/media/${r.id}/image?v=${r.id}" alt="">` : '';
-  const au = r.media_audio ? `<audio controls autoplay preload="none" src="/api/media/${r.id}/audio?v=${r.id}"></audio>` : '';
+  const img = r.media_image
+    ? `<img src="/api/media/${r.id}/image?v=${r.id}" loading="eager" alt="">` : '';
+  const au = r.media_audio
+    ? `<audio controls autoplay preload="auto" src="/api/media/${r.id}/audio?v=${r.id}"></audio>` : '';
   $('#rv-card').innerHTML = img + au +
     `<div class="jp">${esc(r.text)}</div>` +
     (r.reading ? `<div class="rd">${esc(r.reading)}</div>` : '') +
@@ -1181,58 +1259,108 @@ function rvShow() {
   $('#rv-meta').textContent =
     `${RV.i + 1}/${RV.pool.length} · ${r.source_name}${r.episode ? ' · ep ' + r.episode : ''}` +
     ` · ${r.char_len} chars · ${r.level || '—'} · ${RV.point || 'no label'}`;
+  // warm the next card's media (video sources cut audio on demand — the
+  // first play would otherwise stall the review rhythm)
+  const nx = RV.pool[RV.i + 1];
+  if (nx) {
+    if (nx.media_image) { const im = new Image(); im.src = `/api/media/${nx.id}/image?v=${nx.id}`; }
+    if (nx.media_audio) { const a = new Audio(`/api/media/${nx.id}/audio?v=${nx.id}`); a.preload = 'auto'; a.load(); }
+  }
 }
 
+let RVBUSY = false;   // one decision at a time — fast keypresses used to
+                      // double-approve a card and skip the next one
+
 async function rvDecide(kind) {
-  if (RV.i >= RV.pool.length) return;
+  if (RVBUSY || RV.i >= RV.pool.length) return;
+  RVBUSY = true;
   const r = RV.pool[RV.i];
-  RV.done[RV.i] = kind === 'ok' ? 'ok' : kind === 'no' ? 'no' : '';
-  RV.counts[kind] = (RV.counts[kind] || 0) + 1;
-  const ctx = RV.point ? 'point:' + RV.point : 'global';
-  if (kind === 'ok') {
-    await api('/api/pool-decide', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: 'approved' }) });
-    await api('/api/deck/add', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ sentence_id: r.id, point: RV.point || '' }) });
-  } else if (kind === 'no') {
-    await api('/api/pool-decide', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: 'discarded' }) });
+  try {
+    const ctx = RV.point ? 'point:' + RV.point : 'global';
+    if (kind === 'ok') {
+      await api('/api/pool-decide', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: 'approved' }) });
+      await api('/api/deck/add', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sentence_id: r.id, point: RV.point || '' }) });
+    } else if (kind === 'no') {
+      await api('/api/pool-decide', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: 'discarded' }) });
+    }
+    RV.done[RV.i] = kind === 'ok' ? 'ok' : kind === 'no' ? 'no' : '';
+    RV.counts[kind] = (RV.counts[kind] || 0) + 1;
+    RV.i += 1;
+    rvShow();
+  } catch (e) {
+    const meta = $('#rv-meta');
+    if (meta) meta.textContent = `⚠ saving failed (${e.message}) — nothing was recorded, try again`;
+  } finally {
+    RVBUSY = false;
   }
-  RV.i += 1;
-  rvShow();
+}
+
+async function rvMoveTo() {
+  if (RVBUSY || RV.i >= RV.pool.length) return;
+  const r = RV.pool[RV.i];
+  ptOpen(async (newPoint) => {
+    RVBUSY = true;
+    try {
+      await api('/api/pool-decide', { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sentence_id: r.id,
+          context: 'point:' + newPoint, decision: 'approved' }) });
+      await api('/api/deck/add', { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sentence_id: r.id, point: newPoint }) });
+      RV.done[RV.i] = 'ok';
+      RV.counts.ok = (RV.counts.ok || 0) + 1;
+      RV.i += 1;
+      rvShow();
+    } catch (e) {
+      const meta = $('#rv-meta');
+      if (meta) meta.textContent = `⚠ move failed (${e.message}) — nothing was recorded`;
+    } finally {
+      RVBUSY = false;
+    }
+  }, RV.point);
 }
 
 async function rvUndo() {
-  if (RV.i === 0) return;
-  RV.i--;
-  const r = RV.pool[RV.i];
-  const prev = RV.done[RV.i];
-  const ctx = RV.point ? 'point:' + RV.point : 'global';
-  // clear the pool decision
-  await api('/api/pool-decide', { method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: '' }) });
-  // if it was approved, also remove from the deck
-  if (prev === 'ok') {
-    const deck = await api('/api/deck');
-    const match = deck.items.find(it => it.sentence_id === r.id);
-    if (match) {
-      await api('/api/deck/' + match.id, { method: 'DELETE' });
+  if (RVBUSY || RV.i === 0) return;
+  RVBUSY = true;
+  try {
+    RV.i--;
+    const r = RV.pool[RV.i];
+    const prev = RV.done[RV.i];
+    const ctx = RV.point ? 'point:' + RV.point : 'global';
+    await api('/api/pool-decide', { method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sentence_id: r.id, context: ctx, decision: '' }) });
+    if (prev === 'ok') {
+      const deck = await api('/api/deck');
+      const match = deck.items.find(it => it.sentence_id === r.id);
+      if (match) {
+        await api('/api/deck/' + match.id, { method: 'DELETE' });
+      }
+      RV.counts.ok = Math.max(0, RV.counts.ok - 1);
+    } else if (prev === 'no') {
+      RV.counts.no = Math.max(0, RV.counts.no - 1);
+    } else {
+      RV.counts.skip = Math.max(0, RV.counts.skip - 1);
     }
-    RV.counts.ok = Math.max(0, RV.counts.ok - 1);
-  } else if (prev === 'no') {
-    RV.counts.no = Math.max(0, RV.counts.no - 1);
-  } else {
-    RV.counts.skip = Math.max(0, RV.counts.skip - 1);
+    RV.done[RV.i] = undefined;
+    rvShow();
+  } catch (e) {
+    const meta = $('#rv-meta');
+    if (meta) meta.textContent = `⚠ undo failed (${e.message})`;
+  } finally {
+    RVBUSY = false;
   }
-  RV.done[RV.i] = undefined;
-  rvShow();
 }
 
 function rvFinish() {
   $('#rv-card').innerHTML =
     `<div style="padding:30px 0"><b style="font-size:22px">Pool done</b><br>` +
-    `<span class="dim">approved ${RV.counts.ok} · rejected ${RV.counts.no} · skipped ${RV.counts.skip}</span></div>`;
+    `<span class="dim">approved ${RV.counts.ok} · rejected ${RV.counts.no} · later ${RV.counts.skip}</span></div>`;
   $('#rv-meta').textContent = 'approved cards are in the Deck view, ordered under their point';
   $('#rv-progress').innerHTML = '';
 }
@@ -1252,33 +1380,15 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'x') { rvDecide('no'); }
   else if (k === 's' || e.key === 'ArrowLeft') { e.preventDefault(); rvDecide('skip'); }
   else if (k === 'z') { rvUndo(); }
-  else if (k === 'm') {
-    // move current card to a different point
-    if (RV.i < RV.pool.length) {
-      const r = RV.pool[RV.i];
-      ptOpen(async (newPoint) => {
-        await api('/api/pool-decide', { method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ sentence_id: r.id,
-            context: 'point:' + newPoint, decision: 'approved' }) });
-        await api('/api/deck/add', { method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ sentence_id: r.id, point: newPoint }) });
-        // advance past this card (it's now assigned elsewhere)
-        RV.done[RV.i] = 'ok';
-        RV.counts.ok = (RV.counts.ok || 0) + 1;
-        RV.i += 1;
-        rvShow();
-      }, RV.point);
-    }
-  }
+  else if (k === 'm') { rvMoveTo(); }
 });
 
-/* ---------- deck workbench ---------- */
+/* ---------- deck workbench (redactor) ---------- */
 async function showDeck() {
   const d = await api('/api/deck');
   $('#view').innerHTML = '';
   const h = es('div'); h.innerHTML = '<h2>Deck</h2>'; $('#view').append(h);
+  const pts = Object.fromEntries(d.points.map(p => [p.id, p]));
   if (!d.items.length) {
     const p = es('p'); p.className = 'dim';
     p.textContent = 'The deck is empty — approve cards in Batch review and they land here, grouped by grammar point.';
@@ -1289,19 +1399,70 @@ async function showDeck() {
   for (const it of d.items) (groups[it.point || '· no point ·'] =
     groups[it.point || '· no point ·'] || []).push(it);
   for (const [point, items] of Object.entries(groups)) {
+    const pt = pts[point] || {};
     const shows = {};
     for (const it of items) shows[it.source_name] = (shows[it.source_name] || 0) + 1;
     const g = es('div'); g.className = 'deckgroup';
-    g.innerHTML = `<h3>${esc(point)}<span class="balance">${items.length} cards · ` +
+    g.innerHTML =
+      `<h3>${esc(point)}<span class="balance">${items.length} cards · ` +
       Object.entries(shows).map(([k, v]) => `${esc(k)}×${v}`).join(' · ') +
-      '</span></h3>';
+      '</span></h3>' +
+      '<div class="row" style="margin-bottom:8px;flex-wrap:wrap">' +
+      '<input class="instr" placeholder="AI instruction, e.g. make this explanation more example specific" style="flex:1;min-width:220px">' +
+      '<button class="tpl-toggle">Template…</button>' +
+      '<button class="tpl-apply">Apply template to empty</button>' +
+      '<button class="ai-block" title="explain every card without a note in one API call">✦ AI: fill empty notes</button>' +
+      '<span class="bmsg dim"></span></div>' +
+      '<div class="tpl-box" style="display:none">' +
+      '<textarea class="tpl" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:12.5px" ' +
+      'placeholder="explanation template — placeholders: {sentence} {reading} {translation} {title} {pattern} {level} {source} {episode}"></textarea>' +
+      '<div class="row" style="margin-top:6px"><button class="tpl-save primary">Save template</button>' +
+      '<span class="hint">applies to cards with an EMPTY note only</span></div></div>';
     $('#view').append(g);
+    const tplBox = g.querySelector('.tpl-box'),
+          tpl = g.querySelector('.tpl'), bmsg = g.querySelector('.bmsg');
+    tpl.value = pt.template || '';
+    g.querySelector('.tpl-toggle').onclick = () => {
+      tplBox.style.display = tplBox.style.display === 'none' ? '' : 'none';
+    };
+    g.querySelector('.tpl-save').onclick = async () => {
+      await api('/api/point/' + encodeURIComponent(point), { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ template: tpl.value }) });
+      bmsg.textContent = 'template saved ✓';
+    };
+    g.querySelector('.tpl-apply').onclick = async () => {
+      bmsg.textContent = 'filling…';
+      try {
+        const r = await api('/api/template-apply', { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ point }) });
+        bmsg.textContent = `filled ${r.filled} of ${r.total} cards ✓`;
+        if (r.filled) showDeck();
+      } catch (e) { bmsg.textContent = 'error: ' + e.message; }
+    };
+    g.querySelector('.ai-block').onclick = async (ev) => {
+      const btn = ev.target.closest('button');
+      btn.disabled = true;
+      bmsg.textContent = 'asking the API about the whole block…';
+      try {
+        const r = await api('/api/ai/fill-block', { method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ point,
+            instruction: g.querySelector('.instr').value }) });
+        bmsg.textContent = r.updated
+          ? `✦ explained ${r.updated} of ${r.cards} cards` : r.message;
+        if (r.updated) showDeck();
+      } catch (e) { bmsg.textContent = 'error: ' + e.message; }
+      btn.disabled = false;
+    };
     items.forEach((it, idx) => {
       const row = es('div'); row.className = 'drow';
       row.innerHTML =
         `<div style="flex:1;min-width:0"><div class="jp">${esc(it.text)}</div>` +
         `<div class="meta">${esc(it.source_name)}${it.episode ? ' · ep ' + it.episode : ''} · ${it.char_len} chars</div></div>` +
         `<input class="note" placeholder="note / explanation (on card back)" value="${esc(it.note || '')}">` +
+        '<button class="ai1" title="explain this card via the AI API">✦</button>' +
         `<button class="up">↑</button><button class="dn">↓</button>` +
         `<button class="mv" title="move to another point">⇄</button>` +
         `<button class="no rm">✕</button>`;
@@ -1310,6 +1471,21 @@ async function showDeck() {
         await api(`/api/deck/${it.id}`, { method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ note: e.target.value }) });
+      };
+      row.querySelector('.ai1').onclick = async (ev) => {
+        const btn = ev.target.closest('button');
+        btn.disabled = true;
+        const noteEl = row.querySelector('.note');
+        noteEl.placeholder = 'asking the API…';
+        try {
+          const r = await api('/api/ai/fill', { method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ item_id: it.id,
+              instruction: g.querySelector('.instr').value }) });
+          noteEl.value = r.note;
+          noteEl.dispatchEvent(new Event('change'));
+        } catch (e) { noteEl.placeholder = 'error: ' + e.message; }
+        btn.disabled = false;
       };
       row.querySelector('.mv').onclick = () => {
         ptOpen(async (newPoint) => {
@@ -1344,7 +1520,8 @@ async function deckMove(it, to, items) {
 const VIEWS = { stats: showStats, browse: showBrowse, projects: showProjects,
                 points: showPoints,
                 review: showReview, deck: showDeck,
-                sources: showSources, lexicons: showLexicons, export: showExport };
+                sources: showSources, lexicons: showLexicons,
+                export: showExport, settings: showSettings };
 for (const a of document.querySelectorAll('#side a[data-view]')) {
   a.onclick = () => {
     VIEW = a.dataset.view;
