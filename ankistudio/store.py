@@ -137,6 +137,22 @@ class Store:
             self.db.backup(target)
             target.close()
 
+    def resolve_media(self, p: str | Path) -> Path:
+        """Path for media referenced by a source: as given (absolute),
+        then relative to this store's data dir, then by basename in its
+        uploads — so project folders stay portable once paths are stored
+        relative."""
+        if not p:
+            return Path("")
+        q = Path(p)
+        if q.exists():
+            return q
+        cand = self.path.parent / q
+        if cand.exists():
+            return cand
+        b = self.path.parent / "uploads" / q.name
+        return b if b.exists() else q
+
     # -- grammar points ----------------------------------------------------
 
     def add_points(self, rows: list[dict]) -> int:

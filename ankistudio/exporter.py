@@ -127,15 +127,16 @@ def _package(store, rows, name, preset, out_dir, pad_start, pad_end) -> dict:
                     else meta.get("pad_start", meta.get("pad", 0.35))
                 tail = pad_end if pad_end is not None \
                     else meta.get("pad_end", meta.get("pad", 0.35))
-                # current sources keep only the extracted audio track;
-                # older ones still point at a full video file
-                media_path = Path(meta.get("audio") or r["source_path"])
+                # audio lives inside the project at a relative path
+                media_path = store.resolve_media(
+                    meta.get("audio") or r["source_path"])
                 fp = _ff.cut_audio(media_path, start, end, "mp3",
                                    meta=meta, pad_start=lead, pad_end=tail)
                 media.append(str(fp))
                 audio_html = f"[sound:{fp.name}]"
                 n_media += 1
-                imgp = _ff.cached_frame(r["source_id"], r["ref"])
+                imgp = _ff.cached_frame(r["source_id"], r["ref"],
+                                        base=store.path.parent / "media-cache")
                 if imgp is None and Path(r["source_path"]).exists():
                     imgp = _ff.grab_frame(Path(r["source_path"]),
                                           start + (end - start) * 0.4, meta=meta)

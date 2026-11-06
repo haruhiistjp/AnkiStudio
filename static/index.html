@@ -1106,8 +1106,15 @@ async function showProjects() {
     (d.current.is_default ? '' : ' · autosaves every ~20s') + '</div></div>' +
     '<button class="primary" id="prj-save" title="save to this project\'s .aproj">Save</button>' +
     '<button id="prj-saveas">Save a copy as…</button>' +
+    '<button id="prj-media" title="check that every source\'s audio and frames are present">Verify media</button>' +
     (d.current.is_default ? '' : '<button id="prj-close">Close project</button>');
   $('#view').append(cur);
+  const curMeta = cur.querySelector('.meta');
+  const say = (msg, sticky) => {
+    const line = es('div'); line.className = 'meta'; line.textContent = msg;
+    cur.parentElement.insertBefore(line, cur.nextSibling);
+    if (!sticky) setTimeout(() => line.remove(), 8000);
+  };
 
   // Save (in-place): overwrite the project's own .aproj
   $('#prj-save').onclick = async () => {
@@ -1123,26 +1130,69 @@ async function showProjects() {
     }
   };
 
-  // Save As: pick a folder, then save there
+  // Save As: the server builds the .aproj; the browser's save dialog
+  // (File System Access API) puts it anywhere — older browsers fall back
+  // to a normal download into the browser's download folder
   $('#prj-saveas').onclick = async () => {
-    // reuse the folder picker modal
-    await dmOpen({ value: '' }, '~');
-    // the modal sets .value on the target; we need to intercept
-    // simpler: use the export-style approach — ask for a path
-    const dest = prompt('Save to folder (full path):', '~/Desktop');
-    if (!dest) return;
     const btn = $('#prj-saveas');
-    btn.disabled = true; btn.textContent = 'saving…';
+    btn.disabled = true; btn.textContent = 'packing…';
     try {
-      const name = d.current.name || 'ankistudio';
-      const r = await api('/api/project/save?path=' + encodeURIComponent(dest) +
-        '&name=' + encodeURIComponent(name));
-      btn.textContent = 'saved ✓';
-      setTimeout(() => { btn.textContent = 'Save a copy as…'; btn.disabled = false; }, 2000);
+      const r = await api('/api/project/save-as', { method: 'POST',
+        headers: {'Content-Type':'application/json'}, body: '{}' });
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: r.name + '.aproj',
+            types: [{ description: 'AnkiStudio project',
+                      accept: { 'application/zip': ['.aproj'] } }] });
+          const resp = await fetch('/api/export/file?name=' +
+            encodeURIComponent(r.path));
+          const w = await handle.createWritable();
+          await resp.body.pipeTo(w);
+          await w.close();
+          btn.textContent = 'saved ✓';
+        } catch (e) {
+          if (e.name === 'AbortError') { btn.textContent = 'cancelled'; }
+          else throw e;
+        }
+      } else {
+        const a = document.createElement('a');
+        a.href = '/api/export/file?name=' + encodeURIComponent(r.path);
+        a.download = r.name + '.aproj';
+        document.body.appendChild(a); a.click(); a.remove();
+        btn.textContent = 'downloaded';
+        say('your browser saved it to its download folder — enable ' +
+            '“ask where to save each file” in the browser settings to ' +
+            'get a location dialog');
+      }
     } catch (e) {
       alert('save failed: ' + e.message);
-      btn.textContent = 'Save a copy as…'; btn.disabled = false;
     }
+    setTimeout(() => { btn.textContent = 'Save a copy as…'; btn.disabled = false; }, 2000);
+  };
+  // Verify media: audio tracks + frame images of every source
+  $('#prj-media').onclick = async () => {
+    const btn = $('#prj-media');
+    btn.disabled = true; btn.textContent = 'checking…';
+    try {
+      const r = await api('/api/project/media-check');
+      const bad = r.sources.filter(s => s.audio_ok === false);
+      const short_frames = r.sources.filter(
+        s => (s.frames_expected || 0) > (s.frames_have || 0) + 5);
+      let msg = `media OK — ${r.audio_total_mb} MB of audio, ` +
+        `${r.frames_total} frame images`;
+      if (bad.length || short_frames.length) {
+        msg = `⚠ ${bad.length} audio track(s) missing, ` +
+          `${short_frames.length} source(s) short on frames — ` +
+          `audio ${r.audio_total_mb} MB, ${r.frames_total} frames`;
+      }
+      say(msg, true);
+      for (const s of bad)
+        say(`   no audio: #${s.id} ${s.name}`, true);
+      for (const s of short_frames)
+        say(`   frames ${s.frames_have}/${s.frames_expected}: #${s.id} ${s.name}`, true);
+    } catch (e) { say('error: ' + e.message, true); }
+    btn.textContent = 'Verify media'; btn.disabled = false;
   };
   if ($('#prj-close')) $('#prj-close').onclick = async () => {
     await api('/api/project/close', { method: 'POST',

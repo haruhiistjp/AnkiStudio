@@ -185,10 +185,72 @@ def create_app(db_path: str | Path) -> FastAPI:
     app = FastAPI(title="AnkiStudio")
     store = Store(startup_db)
 
+    def _adopt_project_media():
+        """On project open/resume, make the project folder self-contained:
+        (1) missing absolute audio paths rebind to the same release in the
+        project's uploads (uuid prefixes differ between uploads); (2)
+        paths under the project dir are stored relative so the .aproj is
+        portable; (3) frame images for this project's sources are copied
+        from the app-wide cache into the project's own media-cache."""
+        import json as _j
+        import shutil as _sh
+        if store.path.parent == data_dir:
+            return                      # default working project
+        base = store.path.parent
+        changed = False
+        for r in store.db.execute(
+                "select id, path, meta from sources where kind='video'"):
+            meta = _j.loads(r["meta"] or "{}")
+            audio = meta.get("audio") or r["path"] or ""
+            p = Path(audio)
+            if audio and not p.exists():
+                stem = p.name.split("-", 1)[-1]
+                cands = [f for f in (base / "uploads").glob("*.mka")
+                         if f.name.split("-", 1)[-1] == stem]
+                if not cands:
+                    cands = [f for f in (base / "uploads").glob("*.mka")
+                             if f.name.split("-", 1)[-1][:16] == stem[:16]]
+                if len(cands) == 1:
+                    p = cands[0]
+            try:
+                rel = p.resolve().relative_to(base.resolve())
+                p = Path(rel)
+            except (ValueError, OSError):
+                pass
+            ref = str(p)
+            if ref != (meta.get("audio") or "") or ref != (r["path"] or ""):
+                meta["audio"] = ref
+                store.db.execute(
+                    "update sources set path=?, meta=? where id=?",
+                    (ref, _j.dumps(meta), r["id"]))
+                changed = True
+        if changed:
+            store.db.commit()
+        src_ids = [x["id"] for x in store.db.execute("select id from sources")]
+        dst = base / "media-cache"
+        main = data_dir / "media-cache"
+        moved = 0
+        if main.is_dir() and dst.resolve() != main.resolve():
+            for sid in src_ids:
+                for f in main.glob(f"src{sid}-*.jpg"):
+                    d = dst / f.name
+                    if not d.exists():
+                        dst.mkdir(parents=True, exist_ok=True)
+                        try:
+                            _sh.copy2(f, d)
+                            moved += 1
+                        except OSError:
+                            pass
+        return moved
+
     def _reopen(path: Path):
         store.reopen(path)
         pointer.write_text(str(path), encoding="utf-8")
+        _adopt_project_media()
         bust_stats()
+
+    if startup_db != default_db:
+        _adopt_project_media()      # resumed project: rebind + localize
 
     def _write_aproj(out: Path, name: str):
         """Snapshot the live store into a portable .aproj at `out`."""
@@ -597,13 +659,15 @@ def create_app(db_path: str | Path) -> FastAPI:
             if not p:
                 continue
             try:
-                fp = Path(p)
+                fp = store.resolve_media(p)
                 if fp.resolve().parent == updir and fp.is_file():
                     fp.unlink()
                     removed.append(fp.name)
             except OSError:
                 pass
-        frames = list((Path("data/media-cache")).glob(f"src{sid}-*.jpg"))
+        frames = []
+        for fdir in (store.path.parent / "media-cache", data_dir / "media-cache"):
+            frames += list(fdir.glob(f"src{sid}-*.jpg"))
         for fp in frames:
             try: fp.unlink()
             except OSError: pass
@@ -629,11 +693,12 @@ def create_app(db_path: str | Path) -> FastAPI:
             import json as _j
             from . import ffmpeg as _ff
             meta = _j.loads(r["meta"] or "{}")
-            # current sources keep only the extracted audio track; older
-            # ones point at a full video file
-            media_path = Path(meta["audio"]) if meta.get("audio") else Path(r["path"])
+            # audio lives in the project (relative path); legacy sources
+            # kept a full video file — resolve both ways
+            media_path = store.resolve_media(meta.get("audio") or r["path"])
             if not media_path.exists():
                 raise HTTPException(410, "source audio file moved or deleted")
+            frame_base = store.path.parent / "media-cache"
             try:
                 start, end = float(r["start"]), float(r["end"])
             except (TypeError, ValueError):
@@ -644,11 +709,14 @@ def create_app(db_path: str | Path) -> FastAPI:
                     p = _ff.cut_audio(media_path, start, end, ext, meta=meta)
                     return FileResponse(p, filename=f"as-{sid}.{ext}",
                                         headers={"Cache-Control": "private, max-age=3600"})
-                p = _ff.cached_frame(r["source_id"], r["ref"])
-                if p is None and Path(r["path"]).exists():
-                    # legacy source that still has its video file
-                    p = _ff.grab_frame(Path(r["path"]),
-                                       start + (end - start) * 0.4, meta=meta)
+                p = _ff.cached_frame(r["source_id"], r["ref"], base=frame_base)
+                if p is None:
+                    legacy = store.resolve_media(r["path"])
+                    if legacy.exists() and legacy.suffix.lower() in (
+                            ".mp4", ".mkv", ".m4v", ".avi", ".mov", ".webm", ".ts"):
+                        # legacy source that still has its video file
+                        p = _ff.grab_frame(legacy,
+                                           start + (end - start) * 0.4, meta=meta)
                 if p is None:
                     raise HTTPException(404, "no frame for this cue "
                                              "(video files are deleted after import)")
@@ -1064,6 +1132,39 @@ def create_app(db_path: str | Path) -> FastAPI:
         _reopen(default_db)
         pointer.unlink(missing_ok=True)
         return {"closed": True, "db": str(default_db)}
+
+    @app.get("/api/project/media-check")
+    def project_media_check():
+        """Is the current project's media intact? Per source: audio track
+        present, frame images present vs expected. The .aproj snapshot
+        carries the DATABASE — audio and frames live in the project
+        folder beside it, which is exactly what this verifies."""
+        import json as _j
+        out = []
+        audio_bytes = 0
+        frame_base = store.path.parent / "media-cache"
+        for r in store.db.execute(
+                "select id, name, kind, path, meta from sources order by id"):
+            row = {"id": r["id"], "name": r["name"], "kind": r["kind"]}
+            if r["kind"] == "video":
+                meta = _j.loads(r["meta"] or "{}")
+                audio = store.resolve_media(meta.get("audio") or r["path"])
+                row["audio_ok"] = audio.is_file()
+                if row["audio_ok"]:
+                    audio_bytes += audio.stat().st_size
+                row["frames_expected"] = store.db.execute(
+                    "select count(*) c from sentences where source_id=?"
+                    " and keep=1 and media_image='frame'", (r["id"],)
+                ).fetchone()[0]
+                row["frames_have"] = len(list(
+                    frame_base.glob(f"src{r['id']}-*.jpg")))
+            out.append(row)
+        return {"sources": out,
+                "audio_missing": sum(1 for s in out
+                                     if s.get("audio_ok") is False),
+                "audio_total_mb": round(audio_bytes / 1e6, 1),
+                "frames_total": sum(s.get("frames_have", 0) for s in out),
+                "frames_expected": sum(s.get("frames_expected", 0) for s in out)}
 
     @app.get("/api/project/save")
     def project_save(path: str = "", name: str = ""):

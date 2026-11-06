@@ -223,10 +223,16 @@ def import_video(store, video_path: str | Path, subs_path: str | Path,
     updir = store.path.parent / "uploads"
     audio_path = ff.extract_audio(video_path, astream, updir,
                                   name or video_path.stem)
+    # store the project-relative location so the project folder stays
+    # portable (the .aproj travels; uploads/ and media-cache/ live beside)
+    try:
+        audio_ref = str(audio_path.relative_to(store.path.parent))
+    except ValueError:
+        audio_ref = str(audio_path)
 
     src_id = store.add_source(
-        "video", name or video_path.stem, str(audio_path),
-        {"audio": str(audio_path), "astream": astream,
+        "video", name or video_path.stem, audio_ref,
+        {"audio": audio_ref, "astream": astream,
          "astream_label": ff.stream_label(streams[astream]),
          "video_name": video_path.name, "subs": str(subs_path),
          "subs_name": subs_path.name, "sub_lang": lang_applied,
@@ -249,16 +255,19 @@ def import_video(store, video_path: str | Path, subs_path: str | Path,
 
     # frames for kept cues while the temp video still exists — the grabs
     # are independent ffmpeg seeks, so they run in parallel (an import
-    # with several hundred cues drops from minutes to well under a minute)
+    # with several hundred cues drops from minutes to well under a minute).
+    # Frames land in the project's OWN media-cache.
     from concurrent.futures import ThreadPoolExecutor
     meta0 = {"offset": offset, "segments": []}
+    frame_base = store.path.parent / "media-cache"
 
     def _grab(row):
         t = float(row["start"]) + \
             (float(row["end"]) - float(row["start"])) * 0.4
         try:
             ff.grab_frame_to(video_path, t,
-                             ff.frame_cache_path(src_id, row["ref"]),
+                             ff.frame_cache_path(src_id, row["ref"],
+                                                 base=frame_base),
                              meta=meta0)
             return 1
         except _sp.CalledProcessError:

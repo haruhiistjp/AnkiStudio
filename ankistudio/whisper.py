@@ -318,8 +318,8 @@ def analyze_shift(store, sid: int) -> dict:
     if not src or src["kind"] != "video":
         raise ValueError("no such video source")
     meta = _j.loads(src["meta"] or "{}")
-    audio = Path(meta.get("audio") or src["path"] or "")
-    if not audio or not audio.exists():
+    audio = store.resolve_media(meta.get("audio") or src["path"] or "")
+    if not str(audio) or not audio.exists():
         raise ValueError("source audio file is missing")
     rows = store.db.execute(
         "select ref, start, end, text, char_len from sentences"

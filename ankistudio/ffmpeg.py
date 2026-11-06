@@ -139,14 +139,16 @@ def extract_audio(video: Path, aindex: int, out_dir: Path, stem: str) -> Path:
     return out
 
 
-def frame_cache_path(source_id: int, ref: str) -> Path:
+def frame_cache_path(source_id: int, ref: str, base: Path | None = None) -> Path:
     """Deterministic per-cue frame location, so frames grabbed at import
-    time stay findable after the video file itself is deleted."""
-    return CACHE_DIR / f"src{source_id}-{ref}.jpg"
+    time stay findable after the video file itself is deleted. Pass a
+    project-scoped `base` so frames live INSIDE the project."""
+    d = Path(base) if base is not None else CACHE_DIR
+    return d / f"src{source_id}-{ref}.jpg"
 
 
-def cached_frame(source_id: int, ref: str) -> Path | None:
-    p = frame_cache_path(source_id, str(ref))
+def cached_frame(source_id: int, ref: str, base: Path | None = None) -> Path | None:
+    p = frame_cache_path(source_id, str(ref), base)
     return p if p.exists() else None
 
 
