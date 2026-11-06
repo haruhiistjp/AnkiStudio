@@ -1103,21 +1103,46 @@ async function showProjects() {
     '<div class="info"><div class="name">Current: ' + esc(d.current.name) + '</div>' +
     '<div class="meta">' + d.current.sources + ' sources / ' + d.current.points +
     ' points · ' + esc(d.current.db) +
-    (d.current.is_default ? '' : ' · autosaves every ~20s · hourly history versions kept (last 24)') + '</div></div>' +
+    (d.current.is_default ? '' : ' · autosaves every ~20s') + '</div></div>' +
+    '<button class="primary" id="prj-save" title="save to this project\'s .aproj">Save</button>' +
     '<button id="prj-saveas">Save a copy as…</button>' +
-    (d.current.is_default ? '' : '<button class="primary" id="prj-close">Close project</button>');
+    (d.current.is_default ? '' : '<button id="prj-close">Close project</button>');
   $('#view').append(cur);
-  $('#prj-saveas').onclick = async () => {
-    cur.querySelector('#prj-saveas').disabled = true;
+
+  // Save (in-place): overwrite the project's own .aproj
+  $('#prj-save').onclick = async () => {
+    const btn = $('#prj-save');
+    btn.disabled = true; btn.textContent = 'saving…';
     try {
-      const r = await api('/api/project/save-as', { method: 'POST',
-        headers: {'Content-Type':'application/json'}, body: '{}' });
-      const a = document.createElement('a');
-      a.href = '/api/export/file?name=' + encodeURIComponent(r.path);
-      a.download = r.name + '.aproj';
-      document.body.appendChild(a); a.click(); a.remove();
-    } catch (e) { alert('error: ' + e.message); }
-    cur.querySelector('#prj-saveas').disabled = false;
+      const r = await api('/api/project/save');
+      btn.textContent = 'saved ✓';
+      setTimeout(() => { btn.textContent = 'Save'; btn.disabled = false; }, 2000);
+    } catch (e) {
+      alert('save failed: ' + e.message);
+      btn.textContent = 'Save'; btn.disabled = false;
+    }
+  };
+
+  // Save As: pick a folder, then save there
+  $('#prj-saveas').onclick = async () => {
+    // reuse the folder picker modal
+    await dmOpen({ value: '' }, '~');
+    // the modal sets .value on the target; we need to intercept
+    // simpler: use the export-style approach — ask for a path
+    const dest = prompt('Save to folder (full path):', '~/Desktop');
+    if (!dest) return;
+    const btn = $('#prj-saveas');
+    btn.disabled = true; btn.textContent = 'saving…';
+    try {
+      const name = d.current.name || 'ankistudio';
+      const r = await api('/api/project/save?path=' + encodeURIComponent(dest) +
+        '&name=' + encodeURIComponent(name));
+      btn.textContent = 'saved ✓';
+      setTimeout(() => { btn.textContent = 'Save a copy as…'; btn.disabled = false; }, 2000);
+    } catch (e) {
+      alert('save failed: ' + e.message);
+      btn.textContent = 'Save a copy as…'; btn.disabled = false;
+    }
   };
   if ($('#prj-close')) $('#prj-close').onclick = async () => {
     await api('/api/project/close', { method: 'POST',

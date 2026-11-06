@@ -117,8 +117,9 @@ class Store:
         self.db.close()
 
     def reopen(self, path: str | Path):
-        """Switch this Store to another database file (.aproj open)."""
-        self.db.close()
+        """Switch this Store to another database file (.aproj open).
+        Does NOT close the old connection — in-flight requests holding
+        cursors from it would crash; the old conn is GC'd safely."""
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path, check_same_thread=False)
@@ -128,8 +129,13 @@ class Store:
         self.db.commit()
 
     def snapshot_to(self, dest: str | Path):
-        """Consistent copy of the live database (.aproj save)."""
-        self.db.execute("vacuum into ?", (str(dest),))
+        """Consistent copy of the live database (.aproj save).
+        Uses backup() which handles concurrent readers (VACUUM INTO
+        fails when other statements are in progress)."""
+        with self._lock:
+            target = sqlite3.connect(str(dest))
+            self.db.backup(target)
+            target.close()
 
     # -- grammar points ----------------------------------------------------
 

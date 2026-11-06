@@ -1067,15 +1067,20 @@ def create_app(db_path: str | Path) -> FastAPI:
 
     @app.get("/api/project/save")
     def project_save(path: str = "", name: str = ""):
-        """Snapshot the live store into a .aproj at `path` (or result/)."""
-        out = Path(path).expanduser() if path else None
-        name = name or store.get_setting("project_name", "ankistudio")
-        if out and not str(out).endswith(".aproj"):
-            out = out / f"{name}.aproj"
-        if not out:
-            result = data_dir.parent / "result"
-            result.mkdir(exist_ok=True)
-            out = result / f"{name}.aproj"
+        """Save the project. Without a path, saves in-place to the
+        project's own .aproj (same as autosave). With a path, saves there."""
+        name = name or store.get_setting("project_name",
+                                         store.path.parent.name
+                                         if store.path.parent.parent == data_dir / "projects"
+                                         else "ankistudio")
+        if path:
+            out = Path(path).expanduser()
+            if not str(out).endswith(".aproj"):
+                out = out / f"{name}.aproj"
+        else:
+            # in-place: overwrite the project's own .aproj
+            out = data_dir / "projects" / f"{name}.aproj"
+        out.parent.mkdir(parents=True, exist_ok=True)
         _write_aproj(out, name)
         return {"path": str(out)}
 
