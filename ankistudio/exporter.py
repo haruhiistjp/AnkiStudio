@@ -70,7 +70,8 @@ def build_deck(store, name: str, preset: str = "immersion",
                status: str = "approved", source_id: int = 0,
                level: str = "", out_dir: str | Path = "result",
                pad_start: float | None = None,
-               pad_end: float | None = None) -> dict:
+               pad_end: float | None = None,
+               subdecks: bool = True) -> dict:
     """Export sentences as an .apkg. For status='deck', each block uses its
     own note type; for other statuses, `preset` selects one (by name or id)."""
     # load note types and build genanki models
@@ -104,7 +105,7 @@ def build_deck(store, name: str, preset: str = "immersion",
             " left join grammar_points gp on gp.id=d.point"
             " order by d.point, d.position, d.id")]
         return _package(store, rows, name, out_dir, pad_start, pad_end,
-                        nts, models, default_tid)
+                        nts, models, default_tid, subdecks)
     if status == "approved":
         where.append("n.decision='approved'")
     elif status == "pending":
@@ -124,21 +125,58 @@ def build_deck(store, name: str, preset: str = "immersion",
     if not rows:
         return {"error": "no sentences matched the filters"}
     return _package(store, [dict(r) for r in rows], name, out_dir,
-                    pad_start, pad_end, nts, models, default_tid)
+                    pad_start, pad_end, nts, models, default_tid, subdecks)
+
+
+def _deck_id_for(path: str) -> int:
+    """Stable deck ID from the full deck path (::-separated) so Anki
+    recognizes sub-decks across exports."""
+    import hashlib
+    return int(hashlib.sha1(path.encode()).hexdigest()[:10], 16) % 100_000_000 + 10_000_000
 
 
 def _package(store, rows: list[dict], name: str, out_dir,
-             pad_start, pad_end, nts, models, default_tid) -> dict:
-    deck = genanki.Deck(DECK_ID, name or "AnkiStudio export")
+             pad_start, pad_end, nts, models, default_tid,
+             subdecks: bool = True) -> dict:
+    import hashlib
+    root_name = name or "AnkiStudio export"
+    root = genanki.Deck(DECK_ID, root_name)
+    # sub-decks by grammar point (module → point), flat for unassigned
+    subdecks_map: dict[str, genanki.Deck] = {}
+    decks = [root]           # every deck, root included, goes in the package
     media: list[str] = []
     n_media = 0
     from . import ffmpeg as _ff
+
+    # point → (module, title) lookup for sub-deck paths
+    pt_info = {}
+    if subdecks:
+        for r in store.ro().execute(
+                "select id, module, title from grammar_points"):
+            pt_info[r["id"]] = (r["module"] or "", r["title"] or "")
+
+    def deck_for(point: str) -> genanki.Deck:
+        """Root deck, or the sub-deck for this grammar point's module."""
+        if not subdecks or not point or point not in pt_info:
+            return root
+        module, title = pt_info[point]
+        parts = [root_name]
+        if module:
+            parts.append(f"Module {module}")
+        label = point if not title else f"{point} — {title[:30]}"
+        parts.append(label)
+        path = "::".join(parts)
+        if path not in subdecks_map:
+            subdecks_map[path] = genanki.Deck(_deck_id_for(path), path)
+            decks.append(subdecks_map[path])
+        return subdecks_map[path]
 
     for r in rows:
         tid = r.get("note_type_id") or default_tid
         nt = nts.get(tid) or nts[default_tid]
         model = models[tid] if tid in models else models[default_tid]
         nt_fields = json.loads(nt["fields"])
+        target_deck = deck_for(r.get("deck_point") or "")
 
         img_html = audio_html = ""
         ctx = {
@@ -210,7 +248,7 @@ def _package(store, rows: list[dict], name: str, out_dir,
                 pass
 
         values = _fill_fields(nt_fields, ctx)
-        deck.add_note(genanki.Note(
+        target_deck.add_note(genanki.Note(
             guid=genanki.guid_for("as", r["id"]),
             model=model,
             fields=values))
@@ -219,6 +257,7 @@ def _package(store, rows: list[dict], name: str, out_dir,
     out.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^\w\-]+", "_", name or "ankistudio").strip("_") or "ankistudio"
     path = out / f"{slug}.apkg"
-    genanki.Package(deck, media_files=media).write_to_file(path)
+    genanki.Package(decks, media_files=media).write_to_file(path)
     return {"path": str(path), "notes": len(rows), "media_files": n_media,
-            "note_type": nts[default_tid]["name"]}
+            "note_type": nts[default_tid]["name"],
+            "subdecks": len(decks) - 1}

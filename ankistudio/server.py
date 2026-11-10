@@ -171,6 +171,7 @@ class ExportReq(BaseModel):
     out_dir: str = "result"
     pad_start: float | None = None  # override lead padding; None = source's own
     pad_end: float | None = None    # override tail padding; None = source's own
+    subdecks: bool = True           # Module::GP hierarchy on export
 
 from .importer import import_apkg, import_freq_apkg, import_freq_tsv
 from .store import Store
@@ -1468,14 +1469,12 @@ def create_app(db_path: str | Path) -> FastAPI:
     @app.post("/api/export")
     def export(req: ExportReq):
         from .exporter import build_deck
-        if req.preset not in ("immersion", "reading"):
-            raise HTTPException(400, "preset must be immersion|reading")
-
         def pad(v):
             return max(0.0, min(5.0, v)) if v is not None else None
         res = build_deck(store, req.name, req.preset, req.status,
                          req.source, req.level, out_dir=req.out_dir,
-                         pad_start=pad(req.pad_start), pad_end=pad(req.pad_end))
+                         pad_start=pad(req.pad_start), pad_end=pad(req.pad_end),
+                         subdecks=req.subdecks)
         if "error" in res:
             raise HTTPException(400, res["error"])
         return res

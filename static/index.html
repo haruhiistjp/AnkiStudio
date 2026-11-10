@@ -981,6 +981,8 @@ async function showExport() {
     '<option value="all">all kept</option></select>' +
     '<select id="xsrc">' + srcOpts + '</select>' +
     '<select id="xlev">' + levOpts + '</select>' +
+    '<label><input type="checkbox" id="xsub" checked class="check"> sub-decks ' +
+    '(Deck → Module → Grammar point)</label>' +
     '<button class="primary" id="xgo" style="margin-top:14px">Build .apkg</button>' +
     '<div id="xres" class="dim" style="margin-top:10px"></div>';
   $('#view').append(f);
@@ -1001,7 +1003,8 @@ async function showExport() {
           source: +$('#xsrc').value, level: $('#xlev').value,
           out_dir: $('#xdir').value,
           pad_start: $('#xps').value === '' ? null : +$('#xps').value,
-          pad_end: $('#xpe').value === '' ? null : +$('#xpe').value }) });
+          pad_end: $('#xpe').value === '' ? null : +$('#xpe').value,
+          subdecks: $('#xsub').checked }) });
       $('#xres').innerHTML = `✓ ${r.notes} notes, ${r.media_files} media → ` +
         `<a href="/api/export/file?name=${encodeURIComponent(r.path)}" download>${esc(r.path.split('/').pop())}</a>`;
     } catch (e) { $('#xres').textContent = 'error: ' + e.message; }
