@@ -1132,6 +1132,85 @@ def create_app(db_path: str | Path) -> FastAPI:
         return {"opened": str(p), "resumed": True,
                 "name": store.get_setting("project_name", p.parent.name)}
 
+    @app.post("/api/project/merge-deck")
+    def project_merge_deck(req: ProjectOpenReq):
+        """Merge a collaborator's deck edits (notes, templates, boilerplate,
+        pool decisions) into the CURRENT project. Safe to run while
+        harvesting: it only updates existing rows and upserts decisions —
+        rows that exist only on one side (their new cards, your new
+        harvest) are left alone. Accepts an .aproj or a working db path."""
+        import json as _j
+        import zipfile as _z
+        import tempfile as _t
+        import sqlite3 as _sq
+        p = Path(req.path).expanduser()
+        if not p.exists():
+            raise HTTPException(404, f"no such file: {p}")
+        if p.suffix == ".aproj":
+            try:
+                with _z.ZipFile(p) as z, _t.TemporaryDirectory() as td:
+                    z.extract("project.db", td)
+                    theirs = _sq.connect(f"file:{Path(td) / 'project.db'}?mode=ro", uri=True)
+            except (_z.BadZipFile, KeyError):
+                raise HTTPException(400, "not an AnkiStudio .aproj")
+        else:
+            theirs = _sq.connect(f"file:{p}?mode=ro", uri=True)
+        theirs.row_factory = _sq.Row
+        # sanity: same project lineage?
+        try:
+            sig = theirs.execute("select count(*) c from grammar_points").fetchone()["c"]
+        except _sq.OperationalError:
+            raise HTTPException(400, "not a project database")
+        stats = {}
+        with store._lock:
+            # deck note/point updates by id (ids are stable in a fork)
+            rows = [dict(r) for r in theirs.execute(
+                "select id, note, point, position from deck_items")]
+            upd = 0
+            for r in rows:
+                cur = store.db.execute(
+                    "select note, point, position from deck_items where id=?",
+                    (r["id"],)).fetchone()
+                if cur and (r["note"] or "") != (cur["note"] or ""):
+                    store.db.execute(
+                        "update deck_items set note=? where id=?", (r["note"], r["id"]))
+                    upd += 1
+            stats["notes_updated"] = upd
+            # grammar point templates / boilerplate / titles
+            upd = 0
+            for r in theirs.execute(
+                    "select id, title, template, boilerplate from grammar_points"):
+                cur = store.db.execute(
+                    "select title, template, boilerplate from grammar_points where id=?",
+                    (r["id"],)).fetchone()
+                if not cur:
+                    continue
+                t = r["template"] if (r["template"] or "") != "" else cur["template"]
+                b = r["boilerplate"] if (r["boilerplate"] or "") != "" else cur["boilerplate"]
+                ti = r["title"] if (r["title"] or "") != "" else cur["title"]
+                if (t, b, ti) != (cur["template"], cur["boilerplate"], cur["title"]):
+                    store.db.execute(
+                        "update grammar_points set title=?, template=?, boilerplate=?"
+                        " where id=?", (ti, t, b, r["id"]))
+                    upd += 1
+            stats["points_updated"] = upd
+            # their pool decisions (their rejections are valuable curation)
+            upd = 0
+            for r in theirs.execute(
+                    "select sentence_id, context, decision from pool_decisions"):
+                cur = store.db.execute(
+                    "select decision from pool_decisions where sentence_id=?"
+                    " and context=?", (r["sentence_id"], r["context"])).fetchone()
+                if cur is None:
+                    store.db.execute(
+                        "insert into pool_decisions values (?,?,?,?)",
+                        (r["sentence_id"], r["context"], r["decision"], 0))
+                    upd += 1
+            stats["decisions_imported"] = upd
+            store.db.commit()
+        theirs.close()
+        return stats
+
     @app.post("/api/project/close")
     def project_close():
         """Back to the default working project (data/studio.db)."""
