@@ -27,7 +27,13 @@ import shutil
 import statistics
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
+
+# whisper CLI invocations are CPU-heavy; unbounded concurrency (several
+# detections, or detection during an import) starves every run until the
+# per-run timeouts kill them all. Cap the whole process at 2 at a time.
+_WSP_SEM = threading.Semaphore(2)
 
 MARGIN = 6.0          # pass 1: seconds of audio around each sampled cue
 MARGIN2 = 14.0        # pass 2: wider — more context, whisper does better
@@ -37,12 +43,44 @@ MAX_SHIFT = 12.0      # plausible drift (TV-sub vs web-video can exceed 5s);
                       # pass-1 windows physically cap this near ±7 anyway
 MAX_SAMPLES = 6
 PASS2_SAMPLES = 3     # fresh cues for the second (slower) pass
-RUN_TIMEOUT = (100, 150)   # per whisper invocation, seconds, by pass
+RUN_TIMEOUT = (180, 220)   # per transcription invocation, by pass; the
+                           # global deadline keeps the total bounded even
+                           # on a busy machine
 DEADLINE = 280.0      # whole analysis, seconds — never run unbounded
 MATCH_MIN = 0.2       # Dice coefficient below this = not the same utterance
 CONSISTENCY = 0.75    # median absolute deviation above this = inconsistent
 
 _K2H = {chr(k): chr(k - 0x60) for k in range(0x30A1, 0x30F7)}
+
+# CLI-compatible wrapper around faster-whisper, written into the whisper
+# venv by ensure_installed — same JSON shape as the openai-whisper CLI
+WRAPPER_SRC = """#!/{py}
+import json, sys, argparse
+from faster_whisper import WhisperModel
+ap = argparse.ArgumentParser()
+ap.add_argument("audio")
+ap.add_argument("--model", default="small")
+ap.add_argument("--language", default="ja")
+ap.add_argument("--output_format", default="json")
+ap.add_argument("--output_dir", default=".")
+ap.add_argument("--word_timestamps", default="True")
+ap.add_argument("--beam_size", type=int, default=1)
+args, _ = ap.parse_known_args()
+model = WhisperModel(args.model, device="cpu", compute_type="int8")
+segments, _info = model.transcribe(
+    args.audio, language=args.language,
+    word_timestamps=str(args.word_timestamps).lower() != "false",
+    beam_size=args.beam_size, vad_filter=False, condition_on_previous_text=False)
+out = {{"segments": [
+    {{"start": s.start, "end": s.end, "text": s.text,
+      "words": [{{"start": w.start, "end": w.end, "word": w.word}}
+                for w in (s.words or [])]}}
+    for s in segments]}}
+from pathlib import Path
+stem = Path(args.audio).stem
+Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+Path(args.output_dir, stem + ".json").write_text(json.dumps(out, ensure_ascii=False))
+"""
 
 
 def _norm_text(s: str) -> str:
@@ -110,14 +148,19 @@ def _measure_clip(media: Path, astream: int | None, cue: dict, margin: float,
         if astream is not None:
             args += ["-map", f"0:a:{astream}"]
         args += ["-ar", "16000", "-ac", "1", str(wav)]
-        ff._run(args)
-        subprocess.run(
-            [wbin, str(wav), "--model", model, "--language", "ja",
-             "--output_format", "json", "--output_dir", str(td),
-             "--word_timestamps", "True", "--verbose", "False",
-             "--temperature", "0", "--beam_size", "1"],
-            check=True, capture_output=True, timeout=run_timeout)
+        with _WSP_SEM:
+            ff._run(args)
+            out = subprocess.run(
+                [wbin, str(wav), "--model", model, "--language", "ja",
+                 "--output_format", "json", "--output_dir", str(td),
+                 "--word_timestamps", "True", "--verbose", "False",
+                 "--temperature", "0", "--beam_size", "1"],
+                check=True, capture_output=True, timeout=run_timeout)
         segs = json.loads((td / f"{wav.stem}.json").read_text())["segments"]
+    except subprocess.TimeoutExpired:
+        return {"ref": cue["ref"], "text": cue["text"][:30],
+                "offset": None, "match": 0.0,
+                "heard": "(whisper timed out)"}
     except Exception:
         return {"ref": cue["ref"], "text": cue["text"][:30],
                 "offset": None, "match": 0.0, "heard": ""}
@@ -165,7 +208,12 @@ def prepare(media: Path, cues: list[dict], astream: int | None,
 
 def _summarize(samples: list[dict], model: str) -> dict:
     good = [s for s in samples if s["offset"] is not None]
-    offsets = [float(s["offset"]) for s in good]
+    # trust the best transcriptions: weak matches (songs, BGM, wrong
+    # utterance) measurably bias the median — take the top half by
+    # match confidence, at least two samples
+    good.sort(key=lambda s: s.get("match", 0), reverse=True)
+    core = good[:max(2, (len(good) + 1) // 2)] if len(good) >= 2 else good
+    offsets = [float(s["offset"]) for s in core]
     median = round(statistics.median(offsets), 2) if len(offsets) >= 2 else None
     consistent = False
     if median is not None:
@@ -178,7 +226,7 @@ def _summarize(samples: list[dict], model: str) -> dict:
     # for a time-ordered split into two coherent clusters and report it
     # as offset + segment so Apply can configure both.
     split = None
-    timed = sorted((s for s in good if s.get("at") is not None),
+    timed = sorted((s for s in core if s.get("at") is not None),
                    key=lambda s: s["at"])
     if len(timed) >= 4:
         best = None
@@ -250,8 +298,14 @@ def run_measure(prep: dict):
 # ---------- whisper binary management ----------
 
 def _whisper_bin(project_root: Path | None = None) -> str | None:
-    """Whisper executable: on PATH, or previously auto-installed into the
-    project's dedicated whisper venv (.venv-whisper)."""
+    """Transcription backend, best first: the faster-whisper wrapper in
+    the project's dedicated venv (CTranslate2, several times faster and
+    word-timestamped), then any whisper CLI on PATH, then the venv's
+    openai-whisper."""
+    if project_root is not None:
+        fw = project_root / ".venv-whisper" / "bin" / "whisperfw"
+        if fw.exists():
+            return str(fw)
     b = shutil.which("whisper")
     if b:
         return b
@@ -290,11 +344,15 @@ def ensure_installed(project_root: Path) -> dict:
         if r.returncode != 0:
             raise ValueError(f"creating the whisper venv failed: "
                              f"{(r.stderr or r.stdout)[-400:]}")
+    # faster-whisper (fast path, word timestamps) + openai-whisper (fallback)
     r = run([uv, "pip", "install", "--python", str(py),
-             "openai-whisper"], 1800)
+             "faster-whisper", "openai-whisper"], 1800)
     if r.returncode != 0:
-        raise ValueError(f"installing openai-whisper failed: "
+        raise ValueError(f"installing whisper failed: "
                          f"{(r.stderr or r.stdout)[-400:]}")
+    (vdir / "bin" / "whisperfw").write_text(WRAPPER_SRC.format(
+        py=py), encoding="utf-8")
+    (vdir / "bin" / "whisperfw").chmod(0o755)
     b = _whisper_bin(root)
     if not b:
         raise ValueError("installation finished but no whisper executable "
@@ -312,19 +370,27 @@ def _usable(rows) -> list[dict]:
 
 def analyze_shift(store, sid: int) -> dict:
     """Prepare post-import detection against a source's stored audio.
-    Feed the result to run_measure()."""
+    Feed the result to run_measure(). Uses a private read-only connection:
+    several detections can run concurrently without racing the shared
+    store connection."""
     import json as _j
-    src = store.db.execute("select * from sources where id=?", (sid,)).fetchone()
-    if not src or src["kind"] != "video":
-        raise ValueError("no such video source")
-    meta = _j.loads(src["meta"] or "{}")
-    audio = store.resolve_media(meta.get("audio") or src["path"] or "")
-    if not str(audio) or not audio.exists():
-        raise ValueError("source audio file is missing")
-    rows = store.db.execute(
-        "select ref, start, end, text, char_len from sentences"
-        " where source_id=? and keep=1 and start!='' order by start",
-        (sid,)).fetchall()
+    import sqlite3 as _sq
+    db = _sq.connect(f"file:{store.path}?mode=ro", uri=True)
+    db.row_factory = _sq.Row
+    try:
+        src = db.execute("select * from sources where id=?", (sid,)).fetchone()
+        if not src or src["kind"] != "video":
+            raise ValueError("no such video source")
+        meta = _j.loads(src["meta"] or "{}")
+        audio = store.resolve_media(meta.get("audio") or src["path"] or "")
+        if not str(audio) or not audio.exists():
+            raise ValueError("source audio file is missing")
+        rows = db.execute(
+            "select ref, start, end, text, char_len from sentences"
+            " where source_id=? and keep=1 and start!='' order by start",
+            (sid,)).fetchall()
+    finally:
+        db.close()
     return prepare(audio, _usable(rows), None, store.path.parent.parent)
 
 

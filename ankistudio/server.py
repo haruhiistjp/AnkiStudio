@@ -550,8 +550,14 @@ def create_app(db_path: str | Path) -> FastAPI:
             for ev in gen:
                 yield _json.dumps(ev, ensure_ascii=False) + "\n"
 
-        r = store.db.execute("select id, kind from sources where id=?",
-                             (sid,)).fetchone()
+        # private read-only connection: the shared store connection is
+        # not safe for concurrent request threads (InterfaceError races)
+        ro = store.ro()
+        try:
+            r = ro.execute("select id, kind from sources where id=?",
+                           (sid,)).fetchone()
+        finally:
+            ro.close()
         if not r:
             raise HTTPException(404, "no such source")
         try:

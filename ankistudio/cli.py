@@ -116,8 +116,13 @@ def main() -> int:
         return 0
 
     if args.cmd == "serve":
+        import faulthandler
+        import signal
         import uvicorn
         from .server import create_app
+        # kill -USR1 <pid> dumps all thread stacks to the log — the only
+        # sudo-free way to diagnose a wedged server on macOS
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
         app = create_app(db)
         print(f"AnkiStudio → http://127.0.0.1:{args.port}  (db: {db})")
         uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

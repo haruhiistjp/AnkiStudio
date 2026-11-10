@@ -130,12 +130,18 @@ class Store:
 
     def snapshot_to(self, dest: str | Path):
         """Consistent copy of the live database (.aproj save).
-        Uses backup() which handles concurrent readers (VACUUM INTO
-        fails when other statements are in progress)."""
+        Opens its OWN source connection: sqlite3's backup on the shared
+        connection couples the autosave thread to every request thread
+        and has wedged the server under load."""
         with self._lock:
-            target = sqlite3.connect(str(dest))
-            self.db.backup(target)
+            pass                     # serialize snapshots against writes
+        src = sqlite3.connect(self.path)
+        target = sqlite3.connect(str(dest))
+        try:
+            src.backup(target)
+        finally:
             target.close()
+            src.close()
 
     def resolve_media(self, p: str | Path) -> Path:
         """Path for media referenced by a source: as given (absolute),
@@ -152,6 +158,15 @@ class Store:
             return cand
         b = self.path.parent / "uploads" / q.name
         return b if b.exists() else q
+
+    def ro(self):
+        """Fresh read-only connection to this db. The shared self.db is
+        NOT safe for concurrent use from request threads; long-running
+        endpoints (streaming detection, imports) must use their own."""
+        import sqlite3 as _sq
+        con = _sq.connect(f"file:{self.path}?mode=ro", uri=True)
+        con.row_factory = _sq.Row
+        return con
 
     # -- grammar points ----------------------------------------------------
 
