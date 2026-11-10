@@ -72,7 +72,19 @@ create table if not exists grammar_points(
   module text,                   -- lesson/topic grouping
   hints text,                    -- csv of match hints (optional)
   template text default '',      -- per-card explanation template ({sentence}…)
-  boilerplate text default ''    -- block-level text prepended to every card
+  boilerplate text default '',   -- block-level text prepended to every card
+  note_type_id integer default 1 -- FK note_types.id (1=immersion, 2=reading)
+);
+
+create table if not exists note_types(
+  id integer primary key,
+  name text not null,            -- "Immersion", "Reading", "Cloze", …
+  model_id integer not null,     -- stable genanki model id (Anki compat)
+  fields text not null,          -- json list of field names
+  css text default '',
+  front text default '',         -- {{Field}} HTML template for the front
+  back text default '',          -- {{Field}} HTML template for the back
+  builtin integer default 0      -- 1 = shipped defaults, protected from delete
 );
 create table if not exists deck_items(
   id integer primary key,
@@ -112,6 +124,49 @@ class Store:
             self.db.execute("alter table grammar_points add column template text default ''")
         if "boilerplate" not in have:
             self.db.execute("alter table grammar_points add column boilerplate text default ''")
+        if "note_type_id" not in have:
+            self.db.execute("alter table grammar_points add column note_type_id integer default 1")
+        self.db.execute("create index if not exists gp_type on grammar_points(note_type_id)")
+        self._seed_note_types()
+
+    def _seed_note_types(self):
+        """Ship two defaults that exactly match the legacy presets, so
+        existing decks export identically before anyone touches note types."""
+        if self.db.execute("select count(*) c from note_types").fetchone()["c"]:
+            return
+        import json as _j
+        base_css = (
+            ".card { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;\n"
+            "  font-size: 22px; text-align: center; color: #213547;\n"
+            "  background-color: #fff; padding: 24px 12px; }\n"
+            ".nightMode .card { color: #e5e7eb; background-color: #1b1b1f; }\n"
+            ".rd { font-size: 16px; color: #6b7280; margin-top: 8px; }\n"
+            ".tr { font-size: 18px; margin-top: 12px; }\n"
+            ".note { font-size: 14px; color: #6b7280; margin-top: 14px;\n"
+            "  border-top: 1px solid #e5e7eb; padding-top: 10px; }\n"
+            "img { max-width: 480px; border-radius: 8px; }")
+        fields = _j.dumps(["Sentence", "Reading", "Translation", "Image",
+                           "Audio", "Source", "Note"])
+        self.db.executemany(
+            "insert into note_types(id,name,model_id,fields,css,front,back,builtin)"
+            " values (?,?,?,?,?,?,?,1)", [
+                (1, "Immersion", 1607391801, fields, base_css,
+                 "{{Image}}<br>{{Audio}}",
+                 '{{FrontSide}}<hr id="answer">{{Image}}<br>{{Audio}}'
+                 '<div class="jp">{{Sentence}}</div>'
+                 '<div class="rd">{{Reading}}</div>'
+                 '<div class="tr">{{Translation}}</div>'
+                 '<div class="note">{{Note}}</div>'
+                 '<div style="font-size:12px;color:#9ca3af;margin-top:16px">{{Source}}</div>'),
+                (2, "Reading", 1607391802, fields, base_css,
+                 '<div class="jp">{{Sentence}}</div>',
+                 '{{FrontSide}}<hr id="answer">'
+                 '<div class="rd">{{Reading}}</div>'
+                 '<div class="tr">{{Translation}}</div>'
+                 '{{Audio}}<div class="note">{{Note}}</div>'
+                 '<div style="font-size:12px;color:#9ca3af;margin-top:16px">{{Source}}</div>'),
+            ])
+        self.db.commit()
 
     def close(self):
         self.db.close()
@@ -262,6 +317,54 @@ class Store:
                 (context,)):
             ids.add(r["sentence_id"])
         return ids
+
+    # -- note types -----------------------------------------------------------
+
+    def note_types(self) -> list:
+        return self.db.execute(
+            "select * from note_types order by id").fetchall()
+
+    def note_type(self, tid: int):
+        return self.db.execute(
+            "select * from note_types where id=?", (tid,)).fetchone()
+
+    def add_note_type(self, name: str, model_id: int, fields: list[str],
+                      css: str, front: str, back: str) -> int:
+        import json as _j
+        cur = self.db.execute(
+            "insert into note_types(name,model_id,fields,css,front,back,builtin)"
+            " values (?,?,?,?,?,?,0)",
+            (name, model_id, _j.dumps(fields), css, front, back))
+        self.db.commit()
+        return cur.lastrowid
+
+    def update_note_type(self, tid: int, **kwargs):
+        """Update any of: name, fields, css, front, back."""
+        import json as _j
+        cols, args = [], []
+        for k in ("name", "css", "front", "back"):
+            if k in kwargs:
+                cols.append(f"{k}=?"); args.append(kwargs[k])
+        if "fields" in kwargs:
+            cols.append("fields=?"); args.append(_j.dumps(kwargs["fields"]))
+        if not cols:
+            return
+        args.append(tid)
+        self.db.execute(f"update note_types set {', '.join(cols)} where id=?", args)
+        self.db.commit()
+
+    def delete_note_type(self, tid: int):
+        """Builtin types are protected; blocks on a deleted type fall back
+        to id 1 (Immersion)."""
+        r = self.db.execute("select builtin from note_types where id=?",
+                            (tid,)).fetchone()
+        if not r or r["builtin"]:
+            return False
+        self.db.execute("update grammar_points set note_type_id=1 where note_type_id=?",
+                        (tid,))
+        self.db.execute("delete from note_types where id=?", (tid,))
+        self.db.commit()
+        return True
 
     # -- settings ---------------------------------------------------------
 

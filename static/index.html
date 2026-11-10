@@ -723,6 +723,77 @@ async function showSettings() {
     '<button class="primary" id="s-save" style="margin-top:12px">Save settings</button>' +
     '<span class="dim" id="s-msg" style="margin-left:10px"></span>';
   $('#view').append(f);
+
+  // --- note types editor ---
+  const ntbox = es('div'); ntbox.className = 'box'; ntbox.style.marginTop = '18px';
+  ntbox.innerHTML = '<h2 style="font-size:15px">Note types (card layouts)</h2>' +
+    '<p class="hint">each grammar block exports with its assigned note type — ' +
+    'fields, CSS, and front/back templates. Built-in types match the legacy presets.</p>' +
+    '<div id="nt-list"></div>' +
+    '<div class="row" style="margin-top:10px">' +
+    '<button class="primary" id="nt-new">+ New note type</button></div>' +
+    '<div id="nt-editor" style="display:none;margin-top:14px;border-top:1px solid var(--line);padding-top:14px"></div>';
+  $('#view').append(ntbox);
+
+  let NT_TYPES = [];
+  const ntRender = async () => {
+    const d = await api('/api/note-types');
+    NT_TYPES = d.types;
+    const list = $('#nt-list');
+    list.innerHTML = NT_TYPES.map(t =>
+      `<div class="row" style="margin:4px 0;padding:6px;border:1px solid var(--line);border-radius:8px">` +
+      `<b style="min-width:120px">${esc(t.name)}</b>` +
+      `<span class="dim">${t.fields.length} fields: ${esc(t.fields.join(', '))}</span>` +
+      `<span class="spacer"></span>` +
+      (t.builtin ? '<span class="badge">built-in</span>' : '') +
+      `<button class="nt-edit" data-id="${t.id}">Edit</button>` +
+      (t.builtin ? '' : `<button class="no nt-del" data-id="${t.id}">✕</button>`) +
+      `</div>`).join('');
+    for (const b of list.querySelectorAll('.nt-edit'))
+      b.onclick = () => ntOpenEditor(+b.dataset.id);
+    for (const b of list.querySelectorAll('.nt-del'))
+      b.onclick = async () => {
+        if (!confirm('delete this note type? blocks using it fall back to Immersion')) return;
+        await api('/api/note-types/' + b.dataset.id, { method: 'DELETE' });
+        ntRender();
+      };
+  };
+  const ntOpenEditor = (tid = null) => {
+    const t = tid ? NT_TYPES.find(x => x.id === tid) : null;
+    const ed = $('#nt-editor');
+    ed.style.display = '';
+    ed.innerHTML =
+      `<div class="row" style="margin-bottom:8px"><b>${t ? 'Edit' : 'New'} note type</b>` +
+      (t ? `<span class="dim">model_id ${t.model_id}</span>` : '') + `</div>` +
+      `<label>name</label><input id="nt-name" value="${esc(t?.name || '')}" ${t?.builtin ? 'disabled' : ''}>` +
+      `<label>fields (comma-separated — known: Sentence, Reading, Translation, Image, Audio, Source, Note, Text, Extra, Expression, Meaning, Episode, Level)</label>` +
+      `<input id="nt-fields" value="${esc((t?.fields || ['Sentence','Reading','Translation','Image','Audio','Source','Note']).join(', '))}">` +
+      `<label>CSS</label>` +
+      `<textarea id="nt-css" rows="4" style="width:100%;font-family:monospace;font-size:11.5px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)">${esc(t?.css || '')}</textarea>` +
+      `<label>front template ({{Field}} placeholders)</label>` +
+      `<textarea id="nt-front" rows="3" style="width:100%;font-family:monospace;font-size:11.5px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)">${esc(t?.front || '')}</textarea>` +
+      `<label>back template</label>` +
+      `<textarea id="nt-back" rows="4" style="width:100%;font-family:monospace;font-size:11.5px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)">${esc(t?.back || '')}</textarea>` +
+      `<div class="row" style="margin-top:8px">` +
+      `<button class="primary" id="nt-save">${t ? 'Save changes' : 'Create'}</button>` +
+      `<button id="nt-cancel">Cancel</button></div>`;
+    $('#nt-cancel').onclick = () => { ed.style.display = 'none'; };
+    $('#nt-save').onclick = async () => {
+      const body = {
+        name: $('#nt-name').value || 'Untitled',
+        fields: $('#nt-fields').value.split(',').map(f => f.trim()).filter(Boolean),
+        css: $('#nt-css').value, front: $('#nt-front').value, back: $('#nt-back').value };
+      try {
+        if (t) await api('/api/note-types/' + t.id, { method: 'POST',
+          headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        else await api('/api/note-types', { method: 'POST',
+          headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        ed.style.display = 'none'; ntRender();
+      } catch (e) { alert('error: ' + e.message); }
+    };
+  };
+  $('#nt-new').onclick = () => ntOpenEditor();
+  ntRender();
   $('#s-aitest').onclick = async () => {
     $('#s-aitestmsg').textContent = 'asking…';
     await saveSettings();
@@ -1541,6 +1612,8 @@ async function showDeck() {
   const groups = {};
   for (const it of d.items) (groups[it.point || '· no point ·'] =
     groups[it.point || '· no point ·'] || []).push(it);
+  const ntd = await api('/api/note-types');
+  const NT_OPTS = ntd.types.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
   for (const [point, items] of Object.entries(groups)) {
     const pt = pts[point] || {};
     const shows = {};
@@ -1552,6 +1625,7 @@ async function showDeck() {
       '</span></h3>' +
       '<div class="row" style="margin-bottom:8px;flex-wrap:wrap">' +
       '<input class="instr" placeholder="AI instruction, e.g. make this explanation more example specific" style="flex:1;min-width:220px">' +
+      `<select class="ntype" title="note type for this block" style="padding:4px 6px">${NT_OPTS}</select>` +
       '<button class="tpl-toggle">Template…</button>' +
       '<button class="tpl-apply">Apply template to empty</button>' +
       '<button class="ai-block" title="explain every card without a note in one API call">✦ AI: fill empty notes</button>' +
@@ -1574,6 +1648,14 @@ async function showDeck() {
     const bp = g.querySelector('.bp');
     tpl.value = pt.template || '';
     bp.value = pt.boilerplate || '';
+    const ntypeSel = g.querySelector('.ntype');
+    ntypeSel.value = String(pt.note_type_id || 1);
+    ntypeSel.onchange = async () => {
+      await api('/api/point/' + encodeURIComponent(point), { method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ note_type_id: +ntypeSel.value }) });
+      bmsg.textContent = 'note type: ' + ntypeSel.selectedOptions[0].textContent + ' ✓';
+    };
     g.querySelector('.tpl-toggle').onclick = () => {
       tplBox.style.display = tplBox.style.display === 'none' ? '' : 'none';
     };

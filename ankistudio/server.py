@@ -81,6 +81,16 @@ class PointUpdateReq(BaseModel):
     template: str | None = None
     boilerplate: str | None = None
     title: str | None = None
+    note_type_id: int | None = None
+
+
+class NoteTypeReq(BaseModel):
+    name: str
+    fields: list[str]
+    css: str = ""
+    front: str = ""
+    back: str = ""
+    model_id: int | None = None   # auto-assigned if omitted
 
 
 class TemplateApplyReq(BaseModel):
@@ -973,8 +983,58 @@ def create_app(db_path: str | Path) -> FastAPI:
             if val is not None:
                 store.db.execute(
                     f"update grammar_points set {col}=? where id=?", (val, pid))
+        if req.note_type_id is not None:
+            nt = store.note_type(req.note_type_id)
+            if not nt:
+                raise HTTPException(404, f"no such note type: {req.note_type_id}")
+            store.db.execute(
+                "update grammar_points set note_type_id=? where id=?",
+                (req.note_type_id, pid))
         store.db.commit()
         return {"ok": True}
+
+    # ---------- note types ----------
+
+    @app.get("/api/note-types")
+    def note_types_list():
+        import json as _j
+        return {"types": [{**dict(r), "fields": _j.loads(r["fields"])}
+                          for r in store.note_types()]}
+
+    @app.post("/api/note-types")
+    def note_type_create(req: NoteTypeReq):
+        import random as _r
+        model_id = req.model_id or _r.randint(1600000000, 1699999999)
+        tid = store.add_note_type(req.name, model_id, req.fields,
+                                  req.css, req.front, req.back)
+        return {"id": tid, "model_id": model_id}
+
+    @app.post("/api/note-types/{tid}")
+    def note_type_update(tid: int, req: NoteTypeReq):
+        nt = store.note_type(tid)
+        if not nt:
+            raise HTTPException(404, "no such note type")
+        kwargs = {}
+        if req.name and req.name != nt["name"]:
+            if nt["builtin"]:
+                raise HTTPException(400, "cannot rename a built-in note type")
+            kwargs["name"] = req.name
+        for k in ("css", "front", "back"):
+            v = getattr(req, k)
+            if v is not None:
+                kwargs[k] = v
+        if req.fields:
+            kwargs["fields"] = req.fields
+        if kwargs:
+            store.update_note_type(tid, **kwargs)
+        return {"ok": True}
+
+    @app.delete("/api/note-types/{tid}")
+    def note_type_delete(tid: int):
+        if not store.delete_note_type(tid):
+            raise HTTPException(400, "cannot delete a built-in note type,"
+                                     " or it does not exist")
+        return {"deleted": tid}
 
     @app.post("/api/boilerplate-apply")
     def boilerplate_apply(req: TemplateApplyReq):
